@@ -446,6 +446,15 @@ case "tasks":
     print("title: \(project.title)")
     print("start: \(MPPTime.isoMinute(project.start))")
     print("tasks: \(project.tasks.count)")
+    for slot in project.baselineSlots {
+        let info = project.baselineInfo[slot]
+        var line = "baseline: " + project.baselineLabel(slot: slot)
+        if let saved = info?.saved { line += ", saved \(MPPTime.isoMinute(saved))" }
+        if let by = info?.savedBy { line += " by \(by)" }
+        if info?.locked == true { line += ", locked" }
+        if project.effectiveBaseline == slot { line += ", current" }
+        print(line)
+    }
     print()
     print(pad("uid", 7) + pad("lvl", 5) + pad("name", 54) + pad("duration", 11, right: true) + "  "
           + pad("start", 12) + pad("finish", 12) + "units")

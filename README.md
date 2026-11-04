@@ -126,7 +126,11 @@ Read and written:
   estimated durations, manual
   scheduling, all eight constraints, deadlines, priority, task type, effort
   driven, percent complete with actuals, task calendars, notes (RTF), custom WBS,
-  Text1–30, Number1–20, Date1–10, Flag1–20, baselines 0–10;
+  Text1–30, Number1–20, Date1–10, Flag1–20, baselines 0–10 with the date
+  each was saved;
+- baselines past 10, without limit, and each baseline's name, lock and who
+  saved it, plus which one is current: in a stream of MPPKit's own
+  (`ProjectsBaselines`) that Project ignores;
 - links: FS, SS, FF, SF with lags and leads in any unit — working, elapsed or a
   percentage of the predecessor — and links on summary tasks;
 - work resources with max units, initials, e-mail, their own calendars and
