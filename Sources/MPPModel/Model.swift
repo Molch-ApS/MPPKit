@@ -463,6 +463,13 @@ public struct Project: Sendable, Equatable {
     /// ("id", "name", "text3"). Nil when the file does not say — a new
     /// document, or one last saved by Project — and the app picks its default.
     public var viewColumns: [String]?
+    /// Names, locks and saved dates of the baselines, by slot. Slots 0...10
+    /// get their saved date from Project's own field; the rest is the app's
+    /// (`ExtraBaselines`).
+    public var baselineInfo: [Int: BaselineInfo] = [:]
+    /// The baseline variance is measured against. Nil means slot 0 when it
+    /// holds one, as in Project; see `effectiveBaseline`.
+    public var currentBaseline: Int?
 
     public init(title: String, start: Date) {
         self.title = title

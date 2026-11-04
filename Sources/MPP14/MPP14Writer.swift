@@ -936,12 +936,14 @@ private final class Session {
         }
         // When each of Baseline...Baseline10 was saved, as Set Baseline
         // records it. Project shows a slot without one too (baselines typed in
-        // by hand have none); this is the date its dialogs report.
+        // by hand have none); this is the date its dialogs report. The date
+        // the baseline was saved, not the file: now only for a slot with no
+        // date of its own yet.
         for slot in ExtraBaselines.projectSlots {
             let key = MPP.PropsKey.baselineSaved + UInt32(slot)
             guard props.values[key] != nil else { continue }
             let has = project.tasks.contains { $0.baselines[slot] != nil }
-            props.values[key] = MPP.encodeTimestamp(has ? now : nil)
+            props.values[key] = MPP.encodeTimestamp(has ? (project.baselineInfo[slot]?.saved ?? now) : nil)
         }
         if props.values[MPP.PropsKey.minutesPerDay] != nil {
             props.values[MPP.PropsKey.minutesPerDay] = le(UInt32(project.minutesPerDay))
@@ -990,8 +992,9 @@ private final class Session {
         if let bytes = CalendarSetup.encode(setups) {
             root.addStream(MPP.calendarSetupStream, bytes)
         }
-        // Baselines past Project's eleven; removed when there are none, so a
-        // template's own stream never brings old ones back.
+        // Baselines past Project's eleven, and the baselines' info; removed
+        // when there is neither, so a template's own stream never brings old
+        // ones back.
         let extras = ExtraBaselines(project)
         if !extras.isEmpty, let bytes = extras.encode() {
             root.addStream(MPP.extraBaselinesStream, bytes)

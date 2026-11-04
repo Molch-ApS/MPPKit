@@ -553,6 +553,7 @@ final class ExtraBaselinesTests: XCTestCase {
         var p = SampleProject.make()
         for i in p.tasks.indices { p.tasks[i].baselines = [:] }
         for i in p.assignments.indices { p.assignments[i].baselines = [:] }
+        for i in p.resources.indices { p.resources[i].baselines = [:] }
         for slot in slots {
             p.setBaseline(slot: slot)
             for i in p.tasks.indices {
@@ -610,5 +611,122 @@ final class ExtraBaselinesTests: XCTestCase {
     func testNoStreamWithoutExtraSlots() throws {
         let bytes = try MPP14Writer(template: try blankTemplate()).build(project(slots: 0..<11))
         XCTAssertNil(try? MPP14File(bytes: bytes).root.stream(MPP.extraBaselinesStream))
+    }
+
+    private func writer(now: Date) throws -> MPP14Writer {
+        var options = MPP14Writer.Options()
+        options.now = { now }
+        return try MPP14Writer(template: try blankTemplate(), options: options)
+    }
+
+    /// 25 named baselines, some locked, one current: everything comes back,
+    /// in Project's slots and the app's.
+    private func named() -> Project {
+        var p = project(slots: 0..<0)
+        for slot in 0..<25 {
+            let saved = MPPTime.date(2026, 9, 1 + slot, 10, 30)
+            let name = [0, 1, 10, 11, 24].contains(slot) ? "Plan \(slot)" : nil
+            XCTAssertEqual(p.saveNewBaseline(name: name, now: saved, by: slot.isMultiple(of: 2) ? "Maya" : nil), slot)
+        }
+        for slot in [1, 11, 24] { p.setBaselineLocked(slot: slot, true) }
+        p.currentBaseline = 11
+        return p
+    }
+
+    func testInfoRoundTrip() throws {
+        let expected = named()
+        let actual = try MPP14File(bytes: try writer(now: MPPTime.date(2026, 11, 4, 9)).build(expected)).readProject()
+        XCTAssertEqual(actual.baselineSlots, Array(0..<25))
+        XCTAssertEqual(actual.baselineInfo, expected.baselineInfo)
+        XCTAssertEqual(actual.currentBaseline, 11)
+        XCTAssertEqual(actual.effectiveBaseline, 11)
+        XCTAssertEqual(actual.baselineLabel(slot: 24), "B24 · Plan 24")
+        XCTAssertEqual(actual.baselineLabel(slot: 3), "B3")
+    }
+
+    /// What Project saved: no stream, so no names, locks or current, but the
+    /// dates Project recorded for its own slots.
+    func testFileWithoutStream() throws {
+        let expected = named()
+        let file = try MPP14File(bytes: try writer(now: MPPTime.date(2026, 11, 4, 9)).build(expected))
+        file.root.removeChild(MPP.extraBaselinesStream)
+        let actual = try file.readProject()
+        XCTAssertEqual(actual.baselineSlots, Array(0...10))
+        XCTAssertNil(actual.currentBaseline)
+        XCTAssertEqual(actual.effectiveBaseline, 0)
+        for slot in 0...10 {
+            XCTAssertEqual(actual.baselineInfo[slot], BaselineInfo(saved: expected.baselineInfo[slot]?.saved), "slot \(slot)")
+        }
+    }
+
+    /// The saved date is the baseline's, not the file's: saving again later
+    /// doesn't move it. A slot without one gets the first save's date.
+    func testSavingTwiceKeepsSavedDate() throws {
+        let first = MPPTime.date(2026, 10, 1, 9), second = MPPTime.date(2026, 11, 4, 9)
+        var p = project(slots: 0..<2)
+        p.baselineInfo[1] = BaselineInfo(saved: MPPTime.date(2026, 9, 7, 14))
+        p = try MPP14File(bytes: try writer(now: first).build(p)).readProject()
+        XCTAssertEqual(p.baselineInfo[0]?.saved, first)
+        XCTAssertEqual(p.baselineInfo[1]?.saved, MPPTime.date(2026, 9, 7, 14))
+        let file = try MPP14File(bytes: try writer(now: second).build(p))
+        XCTAssertNil(try? file.root.stream(MPP.extraBaselinesStream), "only dates Project keeps itself")
+        p = try file.readProject()
+        XCTAssertEqual(p.baselineInfo[0]?.saved, first)
+        XCTAssertEqual(p.baselineInfo[1]?.saved, MPPTime.date(2026, 9, 7, 14))
+    }
+
+    /// Numbers are never given out twice: after deleting B2 of B0...B4 the
+    /// next is B5. Locked baselines refuse to change.
+    func testDeleteAndLock() throws {
+        var p = project(slots: 0..<0)
+        let now = MPPTime.date(2026, 11, 4, 9)
+        for _ in 0...4 { p.saveNewBaseline(now: now) }
+        try p.deleteBaseline(slot: 2)
+        XCTAssertEqual(p.baselineSlots, [0, 1, 3, 4])
+        XCTAssertTrue(p.tasks.allSatisfy { $0.baselines[2] == nil })
+        XCTAssertEqual(p.saveNewBaseline(name: "  ", now: now), 5)
+        XCTAssertNil(p.baselineInfo[5]?.name)
+
+        p.setBaselineLocked(slot: 3, true)
+        XCTAssertThrowsError(try p.deleteBaseline(slot: 3)) { XCTAssertEqual($0 as? BaselineError, .locked(slot: 3)) }
+        XCTAssertThrowsError(try p.renameBaseline(slot: 3, name: "x"))
+        XCTAssertThrowsError(try p.updateBaseline(slot: 3, now: now))
+        p.setBaselineLocked(slot: 3, false)
+        try p.renameBaseline(slot: 3, name: " Change order 3 ")
+        XCTAssertEqual(p.baselineLabel(slot: 3), "B3 · Change order 3")
+
+        // Deleting the current one makes the newest left current.
+        p.currentBaseline = 3
+        try p.deleteBaseline(slot: 3)
+        XCTAssertEqual(p.currentBaseline, 5)
+        // Slot 0 is current by default, as in Project.
+        p.currentBaseline = nil
+        try p.deleteBaseline(slot: 0)
+        XCTAssertEqual(p.effectiveBaseline, 5)
+    }
+
+    /// Update keeps the name and lock, takes the plan as it is now and
+    /// restamps the date and saver.
+    func testUpdate() throws {
+        var p = project(slots: 0..<0)
+        let slot = p.saveNewBaseline(name: "Contract award", now: MPPTime.date(2026, 9, 7, 9), by: "Maya")
+        let i = try XCTUnwrap(p.tasks.firstIndex { !$0.summary && $0.start != nil })
+        p.tasks[i].baselines[slot]?.start = nil
+        try p.updateBaseline(slot: slot, now: MPPTime.date(2026, 11, 4, 9), by: "Jonas")
+        XCTAssertEqual(p.tasks[i].baselines[slot]?.start, p.tasks[i].start)
+        XCTAssertEqual(p.baselineInfo[slot], BaselineInfo(name: "Contract award", saved: MPPTime.date(2026, 11, 4, 9), savedBy: "Jonas"))
+    }
+
+    /// Streams written before info and current existed still open.
+    func testOldStreamDecodes() throws {
+        var extras = ExtraBaselines(project(slots: 0..<13))
+        XCTAssertFalse(extras.tasks.isEmpty)
+        extras.info = [:]
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(try XCTUnwrap(extras.encode()))) as? [String: Any])
+        XCTAssertNil(json["current"])
+        let old = json.filter { $0.key != "info" }
+        let decoded = ExtraBaselines.decode(Array(try JSONSerialization.data(withJSONObject: old)))
+        XCTAssertEqual(decoded, extras)
+        XCTAssertEqual(ExtraBaselines.decode(Array(#"{"tasks":{}}"#.utf8)), ExtraBaselines())
     }
 }

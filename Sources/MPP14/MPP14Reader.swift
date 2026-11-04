@@ -262,9 +262,25 @@ public final class MPP14File {
             project.statusDate = MPP.decodeTimestamp(raw, offset: 0)
         }
         Self.applyDocumentProperties(to: &project, root: root)
-        // Baselines past Project's eleven, kept by the app.
+        // Baselines past Project's eleven, and every slot's name and lock,
+        // kept by the app.
         if let bytes = try? root.stream(MPP.extraBaselinesStream) {
             ExtraBaselines.decode(bytes).apply(to: &project)
+        }
+        // When Project last saved each of Baseline...Baseline10. Project's
+        // date wins over the app's: the file may have been re-baselined in
+        // Project since. A slot of its own that no task has dates in any more
+        // was cleared in Project, so its info goes too.
+        for slot in ExtraBaselines.projectSlots {
+            let has = project.tasks.contains { $0.baselines[slot] != nil }
+            guard has else {
+                if !project.tasks.isEmpty { project.baselineInfo[slot] = nil }
+                continue
+            }
+            if let raw = props[MPP.PropsKey.baselineSaved + UInt32(slot)],
+               let saved = MPP.decodeTimestamp(raw, offset: 0) {
+                project.baselineInfo[slot, default: BaselineInfo()].saved = saved
+            }
         }
         // The columns: Project's Entry table is the truth both ways. The
         // app's own list — which also keeps widths and columns Project's
