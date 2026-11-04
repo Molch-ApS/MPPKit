@@ -130,6 +130,8 @@ public struct GanttLayout: Sendable {
         let epoch = Self.monday(MPPTime.adding(days: -14, to: first))
         self.epoch = epoch
         func x(_ d: Date?) -> Double? { d.map { $0.timeIntervalSince(epoch) / 60 } }
+        // The baseline drawn under each bar: the project's current one.
+        let slot = project.effectiveBaseline ?? 0
 
         // Visible rows: outline order, skipping descendants of collapsed rows.
         let parents = Set(tasks.map(\.parentUID))
@@ -159,7 +161,7 @@ public struct GanttLayout: Sendable {
                             start: s, finish: f, progress: Double(t.percentComplete) / 100,
                             isCritical: critical.contains(t.uid), isManual: t.manual,
                             hasChildren: hasChildren, isCollapsed: isCollapsed,
-                            baselineStart: x(t.baselines[0]?.start), baselineFinish: x(t.baselines[0]?.finish),
+                            baselineStart: x(t.baselines[slot]?.start), baselineFinish: x(t.baselines[slot]?.finish),
                             deadline: x(t.deadline)))
         }
         self.rows = rows
