@@ -1,7 +1,7 @@
 # MPPKit
 
-[![CI](https://github.com/hpetersen/MPPKit/actions/workflows/ci.yml/badge.svg)](https://github.com/hpetersen/MPPKit/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/hpetersen/MPPKit/actions/workflows/codeql.yml/badge.svg)](https://github.com/hpetersen/MPPKit/actions/workflows/codeql.yml)
+[![CI](https://github.com/Molch-ApS/MPPKit/actions/workflows/ci.yml/badge.svg)](https://github.com/Molch-ApS/MPPKit/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/Molch-ApS/MPPKit/actions/workflows/codeql.yml/badge.svg)](https://github.com/Molch-ApS/MPPKit/actions/workflows/codeql.yml)
 [![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
 Native Swift reading **and writing** of Microsoft Project `.mpp` files, for
@@ -75,7 +75,7 @@ Swift Package Manager:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/hpetersen/MPPKit.git", from: "0.1.0"),
+    .package(url: "https://github.com/Molch-ApS/MPPKit.git", from: "0.1.0"),
 ],
 targets: [
     .target(name: "MyApp", dependencies: ["MPPKit"]),
