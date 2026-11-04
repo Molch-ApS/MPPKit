@@ -14,6 +14,24 @@ import MPPKit
 
 final class GanttTests: XCTestCase {
 
+    // MARK: - Baseline
+
+    /// The bar under each task is the current baseline's, slot 0 by default.
+    func testLayoutDrawsCurrentBaseline() throws {
+        var p = SampleProject.make()
+        p.saveNewBaseline(now: MPPTime.date(2026, 9, 1, 9))
+        let slot = p.saveNewBaseline(now: MPPTime.date(2026, 9, 2, 9))
+        let uid = try XCTUnwrap(p.tasks.first { !$0.summary && $0.start != nil }?.uid)
+        let i = try XCTUnwrap(p.tasks.firstIndex { $0.uid == uid })
+        let finish = p.tasks[i].finish?.addingTimeInterval(86_400 * 3)
+        p.tasks[i].baselines[slot]?.finish = finish
+        let before = try XCTUnwrap(GanttLayout(project: p).rows.first { $0.uid == uid })
+        p.currentBaseline = slot
+        let after = try XCTUnwrap(GanttLayout(project: p).rows.first { $0.uid == uid })
+        XCTAssertNotEqual(before.baselineFinish, after.baselineFinish)
+        XCTAssertEqual(after.baselineFinish.map { $0 - (before.baselineFinish ?? 0) }, 3 * 24 * 60)
+    }
+
     // MARK: - Spatial index
 
     /// The R-tree must return exactly what a linear scan returns.
