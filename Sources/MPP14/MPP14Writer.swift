@@ -480,6 +480,9 @@ private final class Session {
         // ---- calendars (before resources, which add resource calendars) ----
         var calendars = try CalendarBuild(session: self, project: project)
 
+        // ---- outline codes (before tasks, whose values point at their rows) ----
+        let outlineRows = writeOutlineCodes(project)
+
         // ---- tasks ----------------------------------------------------------
         let tasks = try table("TBkndTask", metaSize: MPP.taskMetaSize, meta2Size: MPP.taskMeta2Size)
         let protos = try taskPrototypes(tasks)
@@ -641,6 +644,11 @@ private final class Session {
                 for (n, v) in task.text.sorted(by: { $0.key < $1.key }) {
                     extra.append((MPP.CustomField.text[n - 1], MPP.encodeUnicode(v)))
                 }
+                for (n, guid) in task.outlineCodeValues.sorted(by: { $0.key < $1.key }) {
+                    guard (1...10).contains(n), project.outlineCodeDefinitions[n]?.value(guid) != nil,
+                          let row = outlineRows[guid] else { continue }
+                    extra.append((MPP.OutlineCode.value[n - 1], [0x01, 0x07] + le(UInt32(row)) + guid + [0, 0, 0, 0]))
+                }
                 for (n, v) in task.numbers.sorted(by: { $0.key < $1.key }) {
                     extra.append((MPP.CustomField.number[n - 1], le(v)))
                 }
@@ -689,6 +697,11 @@ private final class Session {
                 // text; the file's own value keeps the link to the list.
                 for (n, v) in task.text where was.text[n] == v {
                     Self.keepUnchanged(&extra, [MPP.CustomField.text[n - 1]], from: mine)
+                }
+                // An outline code value whose table is unchanged keeps Project's bytes.
+                for (n, v) in task.outlineCodeValues where (1...10).contains(n) && was.outlineCodeValues[n] == v
+                    && project.outlineCodeDefinitions[n] == source?.outlineCodeDefinitions[n] {
+                    Self.keepUnchanged(&extra, [MPP.OutlineCode.value[n - 1]], from: mine)
                 }
                 for slot in task.baselines.projectSlots.keys where task.baselines[slot] == was.baselines[slot] {
                     var fields = [MPP14File.taskBaselineStart[slot], MPP14File.taskBaselineFinish[slot],
@@ -1187,6 +1200,9 @@ private final class Session {
         let F = MPP.TaskField.self
         guard let uidItem = taskMap.fm[F.uniqueID] else { return ([:], [], nil, [:]) }
         let wanted = Dictionary(project.tasks.map { ($0.uid, $0.guid) }, uniquingKeysWith: { a, _ in a })
+        // The values of outline codes the project defines are written from it.
+        let outlineVars = Set(project.outlineCodeDefinitions.keys.filter { (1...10).contains($0) }
+            .map { MPP.OutlineCode.value[$0 - 1] })
         func guid(_ row: Row) -> [UInt8]? { Self.bytes(row, taskMap.fm[F.guid], count: 16) }
         var records: [Int: Prototype] = [:], summaries = Set<Int>(), all: [Int: [UInt32: [UInt8]]] = [:]
         var summaryRow: Row?
@@ -1195,7 +1211,7 @@ private final class Session {
             let uid = Int(raw)
             if uid == 0 { summaryRow = row; continue }
             guard let g = wanted[uid], g.count == 16, guid(row) == g else { continue }
-            let vars = t.vars(of: uid).filter { !Self.ownedTaskVars.contains($0.field) }
+            let vars = t.vars(of: uid).filter { !Self.ownedTaskVars.contains($0.field) && !outlineVars.contains($0.field) }
             records[uid] = Prototype(row: row, vars: vars)
             all[uid] = Dictionary(t.vars(of: uid).map { ($0.field, $0.payload) }, uniquingKeysWith: { a, _ in a })
             if let bit = taskMap.bits[F.summary], MPP.metaBit(meta: row.meta, meta2: row.meta2, bit) == 1 {
@@ -1692,6 +1708,32 @@ private final class Session {
         }
     }
 
+    // MARK: Outline codes
+
+    /// The lookup tables and code masks of the task outline codes the project
+    /// defines, where they differ from the template's; the rest of the table
+    /// is kept. Returns the lookup row of every value of a defined outline
+    /// code, for the tasks' values.
+    func writeOutlineCodes(_ project: Project) -> [[UInt8]: Int] {
+        let defs = project.outlineCodeDefinitions.filter { (1...10).contains($0.key) && $0.value.listGUID.count == 16 }
+        guard !defs.isEmpty, var table = OutlineCodeTable(root: root) else { return [:] }
+        let was = source?.outlineCodeDefinitions ?? [:]
+        var rows = Dictionary(table.values.map { ($0.guid, $0.row) }, uniquingKeysWith: { a, _ in a })
+        let changed = defs.filter { was[$0.key] != $0.value }.sorted { $0.key < $1.key }
+        guard !changed.isEmpty else { return rows }
+        let lists = Set(changed.map(\.value.listGUID) + changed.compactMap { was[$0.key]?.listGUID })
+        rows.merge(table.replace(lists: lists, with: changed.map(\.value))) { _, new in new }
+        table.write(to: root)
+        for (_, def) in changed {
+            let key = OutlineCodeMasks.key
+            guard let value = OutlineCodeMasks.setting(props.values[key], list: def.listGUID, levels: max(1, def.depth))
+            else { continue }
+            if props.values[key] == nil { props.order.append(key); props.typeCodes[key] = 0 }
+            props.values[key] = value
+        }
+        return rows
+    }
+
     // MARK: Custom field names
 
     /// The names given to task custom fields ("Timeframe" for Text1), into
@@ -1727,6 +1769,13 @@ private final class Session {
                     .trimmingCharacters(in: .whitespaces), !name.isEmpty else { continue }
                 named.append((id, name))
             }
+        }
+        for (i, native) in MPP.OutlineCode.definition.enumerated() {
+            let id = UInt32(MPP.FieldClass.task) << 16 | native
+            modelled.insert(id)
+            guard let name = project.fieldAliases["outlinecode\(i + 1)"]?
+                .trimmingCharacters(in: .whitespaces), !name.isEmpty else { continue }
+            named.append((id, name))
         }
         guard !named.isEmpty || !old.isEmpty else { return }
 
@@ -1795,6 +1844,25 @@ private final class Session {
             let guid: [UInt8] = [0xB7, 0x39, 0x00, 0x00, 0xBE, 0x8B, 0xEB, 0x4C, 0x82, 0xC4, 0xFA, 0x8C,
                                  UInt8(id >> 24), UInt8(id >> 16 & 0xFF), UInt8(id >> 8 & 0xFF), UInt8(id & 0xFF)]
             rec.replaceSubrange(20..<36, with: guid)
+            records.append(rec)
+            nextDefinition += 1
+        }
+        // An outline code the project defines points at its lookup table.
+        for (n, def) in project.outlineCodeDefinitions where (1...10).contains(n) && def.listGUID.count == 16 {
+            let id = UInt32(MPP.FieldClass.task) << 16 | MPP.OutlineCode.definition[n - 1]
+            if let i = records.firstIndex(where: { u32($0, 0) == id }) {
+                records[i].replaceSubrange(36..<52, with: def.listGUID)
+                continue
+            }
+            var rec = [UInt8](repeating: 0, count: max(recordSize, 52))
+            rec.replaceSubrange(0..<4, with: le(id))
+            rec.replaceSubrange(4..<8, with: le(UInt32(8)))
+            rec.replaceSubrange(8..<12, with: le(UInt32(MPP.FieldClass.assignment) << 16 | nextDefinition))
+            rec.replaceSubrange(12..<16, with: le(UInt32(7)))
+            let guid: [UInt8] = [0xB7, 0x39, 0x00, 0x00, 0xBE, 0x8B, 0xEB, 0x4C, 0x82, 0xC4, 0xFA, 0x8C,
+                                 UInt8(id >> 24), UInt8(id >> 16 & 0xFF), UInt8(id >> 8 & 0xFF), UInt8(id & 0xFF)]
+            rec.replaceSubrange(20..<36, with: guid)
+            rec.replaceSubrange(36..<52, with: def.listGUID)
             records.append(rec)
             nextDefinition += 1
         }

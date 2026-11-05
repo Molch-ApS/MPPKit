@@ -24,3 +24,23 @@ ResourceIdAndUniqueId-project2013-mpp14.mpp: calendar missing in MPPKit: MPXJ=No
 ResourceIdAndUniqueId-project2013-mpp14.mpp: calendar missing in MPPKit: MPXJ=None MPPKit=None
 ResourceIdAndUniqueId-project2013-mpp14.mpp: calendar missing in MPPKit: MPXJ=None MPPKit=None
 ResourceIdAndUniqueId-project2013-mpp14.mpp: calendar missing in MPPKit: MPXJ=None MPPKit=None
+task-outlinecodes-project2013-mpp14.mpp: task 1 'Outline Code1' manual: MPXJ=True MPPKit=False
+task-outlinecodes-project2013-mpp14.mpp: task 2 'Outline Code2' manual: MPXJ=True MPPKit=False
+task-outlinecodes-project2013-mpp14.mpp: task 3 'Outline Code3' manual: MPXJ=True MPPKit=False
+task-outlinecodes-project2013-mpp14.mpp: task 4 'Outline Code4' manual: MPXJ=True MPPKit=False
+task-outlinecodes-project2013-mpp14.mpp: task 5 'Outline Code5' manual: MPXJ=True MPPKit=False
+task-outlinecodes-project2013-mpp14.mpp: task 6 'Outline Code6' manual: MPXJ=True MPPKit=False
+task-outlinecodes-project2013-mpp14.mpp: task 7 'Outline Code7' manual: MPXJ=True MPPKit=False
+task-outlinecodes-project2013-mpp14.mpp: task 8 'Outline Code8' manual: MPXJ=True MPPKit=False
+task-outlinecodes-project2013-mpp14.mpp: task 9 'Outline Code9' manual: MPXJ=True MPPKit=False
+task-outlinecodes-project2013-mpp14.mpp: task 10 'Outline Code10' manual: MPXJ=True MPPKit=False
+task-outlinecodes-project2013-mpp14.mpp: task 11 'Outline Code1' manual: MPXJ=True MPPKit=False
+task-outlinecodes-project2013-mpp14.mpp: task 12 'Outline Code2' manual: MPXJ=True MPPKit=False
+task-outlinecodes-project2013-mpp14.mpp: task 13 'Outline Code3' manual: MPXJ=True MPPKit=False
+task-outlinecodes-project2013-mpp14.mpp: task 14 'Outline Code4' manual: MPXJ=True MPPKit=False
+task-outlinecodes-project2013-mpp14.mpp: task 15 'Outline Code5' manual: MPXJ=True MPPKit=False
+task-outlinecodes-project2013-mpp14.mpp: task 16 'Outline Code6' manual: MPXJ=True MPPKit=False
+task-outlinecodes-project2013-mpp14.mpp: task 17 'Outline Code7' manual: MPXJ=True MPPKit=False
+task-outlinecodes-project2013-mpp14.mpp: task 18 'Outline Code8' manual: MPXJ=True MPPKit=False
+task-outlinecodes-project2013-mpp14.mpp: task 19 'Outline Code9' manual: MPXJ=True MPPKit=False
+task-outlinecodes-project2013-mpp14.mpp: task 20 'Outline Code10' manual: MPXJ=True MPPKit=False

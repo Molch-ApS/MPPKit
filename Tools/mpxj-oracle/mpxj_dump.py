@@ -55,6 +55,7 @@ for t in p.getTasks():
       "priority": int(t.getPriority().getValue()) if t.getPriority() else None, "type": s(t.getType()),
       "effortDriven": bool(t.getEffortDriven()),
       "text": {i: s(t.getText(i)) for i in range(1, 31) if t.getText(i)},
+      "outlineCodes": {i: s(t.getOutlineCode(i)) for i in range(1, 11) if t.getOutlineCode(i)},
       "numbers": {i: num(t.getNumber(i)) for i in range(1, 21) if t.getNumber(i) is not None and num(t.getNumber(i)) != 0},
       "dates": {i: iso(t.getDate(i)) for i in range(1, 11) if t.getDate(i) is not None},
       "flags": {i: True for i in range(1, 21) if t.getFlag(i)},
