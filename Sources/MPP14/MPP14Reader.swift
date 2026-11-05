@@ -377,6 +377,9 @@ public final class MPP14File {
                 project.manager = s.string(DocSummaryPID.manager)
                 project.company = s.string(DocSummaryPID.company)
             }
+            for (name, value) in OLEPropertySet.userProperties(raw) {
+                if case .string(let text) = value { project.customProperties[name] = text }
+            }
         }
     }
 

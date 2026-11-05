@@ -122,9 +122,10 @@ public enum OLEPropertySet {
             for i in 0..<Int(count) {
                 let e = Int(sectionOffset) + 8 + i * 8
                 guard e + 8 <= bytes.count else { break }
+                // A VT_I2: the type, then the value (65001 reads as -535).
                 if r.u32(at: e) == 1, let off = r.u32(at: e + 4),
-                   let v = r.u32(at: Int(sectionOffset) + Int(off)), v < 65536 {
-                    codePage = v
+                   let v = r.u16(at: Int(sectionOffset) + Int(off) + 4) {
+                    codePage = UInt32(v)
                 }
             }
 
@@ -215,25 +216,113 @@ public enum OLEPropertySet {
     /// pymppwriter's `update_property_set_strings` (MIT).
     public static func updatingStrings(_ bytes: [UInt8], _ updates: [UInt32: String],
                                        section target: Int = 0) -> [UInt8] {
+        guard var sections = rawSections(bytes), target < sections.count else { return bytes }
+        let codePage = sections[target].codePage
+        for (pid, value) in updates { sections[target].set(pid, lpstr(value, codePage: codePage)) }
+        return build(bytes, sections)
+    }
+
+    // MARK: - User-defined properties
+
+    /// The FMTID of the user-defined section of `DocumentSummaryInformation`,
+    /// where Project keeps File > Properties > Custom.
+    public static let userDefinedFormatID: [UInt8] = [0x05, 0xD5, 0xCD, 0xD5, 0x9C, 0x2E, 0x1B, 0x10,
+                                                      0x93, 0x97, 0x08, 0x00, 0x2B, 0x2C, 0xF9, 0xAE]
+
+    /// The user-defined properties, by name, in the order the file lists
+    /// them. Their names come from the section's dictionary (property 0).
+    public static func userProperties(_ bytes: [UInt8]) -> [(name: String, value: Value)] {
+        guard let sections = rawSections(bytes),
+              let i = sections.firstIndex(where: { $0.formatID == userDefinedFormatID }) else { return [] }
+        let section = sections[i]
+        let names = dictionary(section)
+        let doc = parse(bytes)
+        guard i < doc.sections.count else { return [] }
+        return section.order.compactMap { pid in
+            guard pid > 1, let name = names.first(where: { $0.pid == pid })?.name,
+                  let value = doc.sections[i][pid] else { return nil }
+            return (name, value)
+        }
+    }
+
+    /// Set user-defined string properties by name, or remove them (nil),
+    /// keeping every other property byte-for-byte. Names compare without
+    /// regard to case, as in Project. A new value is written as `VT_LPSTR`
+    /// in the section's code page; a stream without the section gets one in
+    /// UTF-8 (code page 65001), as Project writes it.
+    ///
+    /// Microsoft Project drops a single value over about 41.5 KB, and every
+    /// file property once they pass about 512 KB together, without a word.
+    /// Callers keep well under both.
+    public static func updatingUserProperties(_ bytes: [UInt8], _ updates: [String: String?]) -> [UInt8] {
+        guard var sections = rawSections(bytes), !updates.isEmpty else { return bytes }
+        let i: Int
+        if let found = sections.firstIndex(where: { $0.formatID == userDefinedFormatID }) {
+            i = found
+        } else {
+            guard updates.values.contains(where: { $0 != nil }) else { return bytes }
+            var section = RawSection(formatID: userDefinedFormatID, order: [], raw: [:])
+            section.set(1, [0x02, 0, 0, 0, 0xE9, 0xFD, 0, 0])      // VT_I2 65001
+            sections.append(section)
+            i = sections.count - 1
+        }
+        var names = dictionary(sections[i])
+        let codePage = sections[i].codePage
+        for (name, value) in updates.sorted(by: { $0.key < $1.key }) {
+            let existing = names.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }?.pid
+            if let value {
+                let pid = existing ?? max(1, sections[i].order.max() ?? 1, names.map(\.pid).max() ?? 1) + 1
+                if existing == nil { names.append((pid, name)) }
+                sections[i].set(pid, lpstr(value, codePage: codePage))
+            } else if let pid = existing {
+                names.removeAll { $0.pid == pid }
+                sections[i].remove(pid)
+            }
+        }
+        sections[i].set(0, dictionaryBytes(names, codePage: codePage), first: true)
+        return build(bytes, sections)
+    }
+
+    // MARK: - Raw sections
+
+    /// A section as raw property values, in the file's order.
+    private struct RawSection {
+        var formatID: [UInt8]
+        var order: [UInt32]
+        var raw: [UInt32: [UInt8]]
+
+        /// The code page LPSTR values are encoded in (property 1).
+        var codePage: UInt32 {
+            guard let cp = raw[1], cp.count >= 6, let v = BinaryReader(cp).u16(at: 4) else { return 1252 }
+            return UInt32(v)
+        }
+
+        mutating func set(_ pid: UInt32, _ bytes: [UInt8], first: Bool = false) {
+            raw[pid] = bytes
+            guard !order.contains(pid) else { return }
+            if first { order.insert(pid, at: 0) } else { order.append(pid) }
+        }
+
+        mutating func remove(_ pid: UInt32) {
+            raw[pid] = nil
+            order.removeAll { $0 == pid }
+        }
+    }
+
+    private static func rawSections(_ bytes: [UInt8]) -> [RawSection]? {
         let r = BinaryReader(bytes)
         guard bytes.count >= 28, let sectionCount = r.u32(at: 24), sectionCount > 0,
-              sectionCount < 64, target < Int(sectionCount) else { return bytes }
-
-        struct RawSection {
-            var formatID: [UInt8]
-            var order: [UInt32]
-            var raw: [UInt32: [UInt8]]
-        }
+              sectionCount < 64 else { return nil }
         var sections: [RawSection] = []
         for s in 0..<Int(sectionCount) {
             let entry = 28 + s * 20
             guard entry + 20 <= bytes.count, let offset = r.u32(at: entry + 16).map(Int.init),
                   let size = r.u32(at: offset).map(Int.init),
-                  let count = r.u32(at: offset + 4).map(Int.init), count < 4096 else { return bytes }
+                  let count = r.u32(at: offset + 4).map(Int.init), count < 4096 else { return nil }
             var entries: [(UInt32, Int)] = []
             for i in 0..<count {
                 guard let pid = r.u32(at: offset + 8 + i * 8),
-                      let poff = r.u32(at: offset + 12 + i * 8) else { return bytes }
+                      let poff = r.u32(at: offset + 12 + i * 8) else { return nil }
                 entries.append((pid, Int(poff)))
             }
             let bounds = entries.map(\.1).sorted() + [size]
@@ -241,30 +330,17 @@ public enum OLEPropertySet {
             for (pid, poff) in entries {
                 let next = bounds.first { $0 > poff } ?? size
                 let lo = offset + poff, hi = min(offset + next, bytes.count)
-                guard lo <= hi else { return bytes }
+                guard lo <= hi else { return nil }
                 raw[pid] = Array(bytes[lo..<hi])
             }
             sections.append(RawSection(formatID: Array(bytes[entry..<entry + 16]),
                                        order: entries.map(\.0), raw: raw))
         }
+        return sections
+    }
 
-        // The code page LPSTR values are encoded in.
-        var codePage: UInt32 = 1252
-        if let cp = sections[target].raw[1], cp.count >= 8, let v = BinaryReader(cp).u16(at: 4) {
-            codePage = UInt32(v)
-        }
-        for (pid, value) in updates {
-            var encoded = encodeString(value, codePage: codePage)
-            encoded.append(0)
-            var w = BinaryWriter()
-            w.u32(VT.lpstr)
-            w.u32(UInt32(encoded.count))
-            w.append(encoded)
-            w.pad(toMultipleOf: 4)
-            sections[target].raw[pid] = w.bytes
-            if !sections[target].order.contains(pid) { sections[target].order.append(pid) }
-        }
-
+    /// The property set with these sections, under the original header.
+    private static func build(_ original: [UInt8], _ sections: [RawSection]) -> [UInt8] {
         var built: [(formatID: [UInt8], body: [UInt8])] = []
         for section in sections {
             let base = 8 + section.order.count * 8
@@ -284,7 +360,8 @@ public enum OLEPropertySet {
             built.append((section.formatID, out.bytes))
         }
         var out = BinaryWriter()
-        out.append(Array(bytes.prefix(28)))
+        out.append(Array(original.prefix(24)))
+        out.u32(UInt32(built.count))
         var position = 28 + built.count * 20
         for section in built {
             out.append(section.formatID)
@@ -293,6 +370,67 @@ public enum OLEPropertySet {
         }
         for section in built { out.append(section.body) }
         return out.bytes
+    }
+
+    /// A `VT_LPSTR` value: type, byte count with the terminator, the text.
+    private static func lpstr(_ value: String, codePage: UInt32) -> [UInt8] {
+        var encoded = encodeString(value, codePage: codePage)
+        encoded.append(0)
+        var w = BinaryWriter()
+        w.u32(VT.lpstr)
+        w.u32(UInt32(encoded.count))
+        w.append(encoded)
+        w.pad(toMultipleOf: 4)
+        return w.bytes
+    }
+
+    /// The dictionary (property 0): `u32` count, then per entry the property
+    /// id, the name's length with its terminator and the name. In code page
+    /// 1200 the length counts UTF-16 units and each entry is padded to 4
+    /// bytes; otherwise it counts bytes in the section's code page.
+    private static func dictionary(_ section: RawSection) -> [(pid: UInt32, name: String)] {
+        guard let d = section.raw[0] else { return [] }
+        let r = BinaryReader(d)
+        let utf16 = section.codePage == 1200
+        var out: [(UInt32, String)] = []
+        var p = 4
+        for _ in 0..<min(Int(r.u32(at: 0) ?? 0), 4096) {
+            guard let pid = r.u32(at: p), let len = r.u32(at: p + 4).map(Int.init) else { break }
+            p += 8
+            let size = utf16 ? len * 2 : len
+            guard p + size <= d.count else { break }
+            var raw = Array(d[p..<p + size])
+            if utf16 {
+                while raw.count >= 2, raw.suffix(2) == [0, 0] { raw.removeLast(2) }
+                out.append((pid, decodeUTF16LE(raw)))
+                p = (p + size + 3) & ~3
+            } else {
+                while raw.last == 0 { raw.removeLast() }
+                out.append((pid, decodeString(raw, codePage: section.codePage)))
+                p += size
+            }
+        }
+        return out
+    }
+
+    private static func dictionaryBytes(_ names: [(pid: UInt32, name: String)], codePage: UInt32) -> [UInt8] {
+        var w = BinaryWriter()
+        w.u32(UInt32(names.count))
+        for (pid, name) in names {
+            w.u32(pid)
+            if codePage == 1200 {
+                let units = Array(name.utf16) + [0]
+                w.u32(UInt32(units.count))
+                for u in units { w.u8(UInt8(u & 0xFF)); w.u8(UInt8(u >> 8)) }
+                w.pad(toMultipleOf: 4)
+            } else {
+                let encoded = encodeString(name, codePage: codePage) + [0]
+                w.u32(UInt32(encoded.count))
+                w.append(encoded)
+            }
+        }
+        w.pad(toMultipleOf: 4)
+        return w.bytes
     }
 
     private static func encodeString(_ s: String, codePage: UInt32) -> [UInt8] {
