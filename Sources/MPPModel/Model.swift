@@ -447,6 +447,11 @@ public struct Project: Sendable, Equatable {
     public var manager: String?
     public var company: String?
     public var category: String?
+    /// File > Properties > Custom: the user-defined text properties, by name.
+    /// Properties of other types are kept in the file as they are. Microsoft
+    /// Project drops a value over about 41.5 KB, and every property once they
+    /// pass about 512 KB together, without a word: keep well under both.
+    public var customProperties: [String: String] = [:]
 
     public var statusDate: Date?
     /// Project's "Tasks are critical if slack is less than or equal to", in
