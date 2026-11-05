@@ -351,16 +351,32 @@ public enum MPP {
     /// The "project" storage: three spaces followed by 114.
     public static let projectStorage = "   114"
 
-    /// A root stream of our own: the outline columns, comma-separated.
+    /// Read only, from files written before `AppProperty`: the outline columns, comma-separated.
     public static let viewColumnsStream = "ProjectsColumns"
 
-    /// A root stream of our own: each calendar's shifts and holiday sets, as
+    /// Read only, from files written before `AppProperty`: each calendar's shifts and holiday sets, as
     /// JSON keyed by calendar name (`CalendarSetup`).
     public static let calendarSetupStream = "ProjectsCalendars"
 
-    /// A root stream of our own: baseline slots 11 and up, which Project has
+    /// Read only, from files written before `AppProperty`: baseline slots 11 and up, which Project has
     /// no fields for, as JSON (`ExtraBaselines`).
     public static let extraBaselinesStream = "ProjectsBaselines"
+
+    /// What Project has no field for, in custom properties (`chunkedProperty`):
+    /// Project drops the three streams above when it saves, but keeps these.
+    /// Files written before still have the streams, which are read when the
+    /// properties are missing.
+    public enum AppProperty {
+        public static let columns = "MPPKit.Columns"
+        public static let calendars = "MPPKit.Calendars"
+        public static let baselines = "MPPKit.Baselines"
+        public static let all = [columns, calendars, baselines]
+
+        /// A part of one of these properties (`MPPKit.Columns.000`, …).
+        public static func isOwn(_ name: String) -> Bool {
+            all.contains { name.hasPrefix($0 + ".") }
+        }
+    }
 
     /// The Entry table (table 1, the Gantt Chart's) as Project stores it:
     /// `   214/CTable`, Var2Data field 6 per table — a 12-byte header (table

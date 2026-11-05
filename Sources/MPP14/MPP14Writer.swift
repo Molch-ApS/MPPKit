@@ -63,6 +63,10 @@ public final class MPP14Writer {
             withUnsafeBytes(of: UUID().uuid) { Array($0) }
         }
 
+        /// The most all custom properties may take, MPPKit's own included;
+        /// past it the oldest baselines past Project's eleven are dropped.
+        public var propertyBudget = Project.propertyBudget
+
         public init() {}
     }
 
@@ -986,34 +990,42 @@ private final class Session {
         retargetGanttScroll(to: project.start)
         refreshGanttRows(project.tasks.map(\.uid), start: pStart, finish: pFinish)
 
-        // ---- document metadata -------------------------------------------------
-        writeDocumentProperties(project)
-
-        // ---- app view state ------------------------------------------------------
-        // Project ignores streams it does not know; a file without one keeps
-        // whatever it had.
-        if let columns = project.viewColumns {
-            root.addStream(MPP.viewColumnsStream, Array(columns.joined(separator: ",").utf8))
+        // ---- what Project has no field for, in custom properties ---------------
+        // Project drops root streams it doesn't know when it saves, but keeps
+        // custom properties. The columns, each calendar's shifts and holiday
+        // sets, and the baselines past Project's eleven with every slot's
+        // info go there; the old streams go.
+        var stored = project
+        stored.customProperties = project.customProperties.filter { !MPP.AppProperty.isOwn($0.key) }
+        // A project without columns keeps the ones the file has.
+        var kept: [String: String] = [:]
+        if let dsi = try? root.stream("\u{5}DocumentSummaryInformation") {
+            for (name, value) in OLEPropertySet.userProperties(dsi) {
+                if case .string(let text) = value { kept[name] = text }
+            }
         }
-        // Shifts and holiday sets, by calendar name. Always written, so a
-        // set removed in the app does not come back from an older stream.
+        let columns = project.viewColumns.map { Array($0.joined(separator: ",").utf8) }
+            ?? Project.chunkedProperty(MPP.AppProperty.columns, in: kept) ?? (try? root.stream(MPP.viewColumnsStream))
+        stored.setChunkedProperty(MPP.AppProperty.columns, columns)
         var setups: [String: CalendarSetup] = [:]
         for cal in [project.calendar].compactMap({ $0 }) + project.calendars {
             let setup = CalendarSetup(shifts: cal.shifts, holidays: cal.holidays)
             if !setup.isEmpty { setups[cal.name] = setup }
         }
-        if let bytes = CalendarSetup.encode(setups) {
-            root.addStream(MPP.calendarSetupStream, bytes)
+        stored.setChunkedProperty(MPP.AppProperty.calendars, setups.isEmpty ? nil : CalendarSetup.encode(setups))
+        var extras = ExtraBaselines(project)
+        stored.setChunkedProperty(MPP.AppProperty.baselines, extras.isEmpty ? nil : extras.encode())
+        // Past the budget, the oldest of the extra baselines give way.
+        while stored.customPropertySize > options.propertyBudget, let slot = extras.oldestExtraSlot {
+            extras.remove(slot: slot)
+            stored.setChunkedProperty(MPP.AppProperty.baselines, extras.isEmpty ? nil : extras.encode())
         }
-        // Baselines past Project's eleven, and the baselines' info; removed
-        // when there is neither, so a template's own stream never brings old
-        // ones back.
-        let extras = ExtraBaselines(project)
-        if !extras.isEmpty, let bytes = extras.encode() {
-            root.addStream(MPP.extraBaselinesStream, bytes)
-        } else {
-            root.removeChild(MPP.extraBaselinesStream)
+        for stream in [MPP.viewColumnsStream, MPP.calendarSetupStream, MPP.extraBaselinesStream] {
+            root.removeChild(stream)
         }
+
+        // ---- document metadata -------------------------------------------------
+        writeDocumentProperties(stored)
 
         return try CFBWriter.write(root: root, rootCLSID: CFBFile.projectRootCLSID)
     }

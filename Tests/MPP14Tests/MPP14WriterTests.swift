@@ -585,7 +585,7 @@ final class MPP14WriterTests: XCTestCase {
 }
 
 /// Baselines past Project's eleven: slots 0...10 in Project's own fields, the
-/// rest in the app's stream. Uses the committed blank template, so it runs
+/// rest in custom properties. Uses the committed blank template, so it runs
 /// without a fixture.
 final class ExtraBaselinesTests: XCTestCase {
 
@@ -626,19 +626,20 @@ final class ExtraBaselinesTests: XCTestCase {
         }
     }
 
-    /// What Project sees: the file without the app's stream holds exactly
+    /// What Project sees: the file without MPPKit's properties holds exactly
     /// Baseline...Baseline10.
     func testProjectSeesOnlyItsElevenSlots() throws {
         let bytes = try MPP14Writer(template: try blankTemplate()).build(project(slots: 0..<50))
         let file = try MPP14File(bytes: bytes)
-        XCTAssertNotNil(try? file.root.stream(MPP.extraBaselinesStream))
-        file.root.removeChild(MPP.extraBaselinesStream)
+        XCTAssertTrue(file.hasAppProperty(MPP.AppProperty.baselines))
+        XCTAssertNil(try? file.root.stream(MPP.extraBaselinesStream))
+        file.removeAppProperties()
         let seen = try file.readProject()
         for t in seen.tasks { XCTAssertEqual(t.baselines.keys.sorted(), Array(0...10), "task \(t.uid)") }
     }
 
     /// Baselines saved one at a time, each after a save and reopen, as in
-    /// use: the stream appears with the twelfth and grows with each one after,
+    /// use: the property appears with the twelfth and grows with each one after,
     /// with no upper limit.
     func testBaselinesAddedOneAtATime() throws {
         let template = try blankTemplate()
@@ -648,16 +649,16 @@ final class ExtraBaselinesTests: XCTestCase {
             XCTAssertEqual(slot, n - 1)
             p.setBaseline(slot: slot)
             let file = try MPP14File(bytes: try MPP14Writer(template: template).build(p))
-            XCTAssertEqual((try? file.root.stream(MPP.extraBaselinesStream)) != nil, n > 11, "after \(n) baselines")
+            XCTAssertEqual(file.hasAppProperty(MPP.AppProperty.baselines), n > 11, "after \(n) baselines")
             p = try file.readProject()
             XCTAssertEqual(p.tasks.map { $0.baselines.count }.min(), n, "after \(n) baselines")
         }
     }
 
-    /// Eleven or fewer: no stream, so the file is what it was before.
-    func testNoStreamWithoutExtraSlots() throws {
+    /// Eleven or fewer: no property, so the file is what it was before.
+    func testNoPropertyWithoutExtraSlots() throws {
         let bytes = try MPP14Writer(template: try blankTemplate()).build(project(slots: 0..<11))
-        XCTAssertNil(try? MPP14File(bytes: bytes).root.stream(MPP.extraBaselinesStream))
+        XCTAssertFalse(try MPP14File(bytes: bytes).hasAppProperty(MPP.AppProperty.baselines))
     }
 
     private func writer(now: Date) throws -> MPP14Writer {
@@ -691,12 +692,12 @@ final class ExtraBaselinesTests: XCTestCase {
         XCTAssertEqual(actual.baselineLabel(slot: 3), "B3")
     }
 
-    /// What Project saved: no stream, so no names, locks or current, but the
+    /// What Project saved without MPPKit's properties: no names, locks or current, but the
     /// dates Project recorded for its own slots.
-    func testFileWithoutStream() throws {
+    func testFileWithoutProperties() throws {
         let expected = named()
         let file = try MPP14File(bytes: try writer(now: MPPTime.date(2026, 11, 4, 9)).build(expected))
-        file.root.removeChild(MPP.extraBaselinesStream)
+        file.removeAppProperties()
         let actual = try file.readProject()
         XCTAssertEqual(actual.baselineSlots, Array(0...10))
         XCTAssertNil(actual.currentBaseline)
@@ -716,7 +717,7 @@ final class ExtraBaselinesTests: XCTestCase {
         XCTAssertEqual(p.baselineInfo[0]?.saved, first)
         XCTAssertEqual(p.baselineInfo[1]?.saved, MPPTime.date(2026, 9, 7, 14))
         let file = try MPP14File(bytes: try writer(now: second).build(p))
-        XCTAssertNil(try? file.root.stream(MPP.extraBaselinesStream), "only dates Project keeps itself")
+        XCTAssertFalse(file.hasAppProperty(MPP.AppProperty.baselines), "only dates Project keeps itself")
         p = try file.readProject()
         XCTAssertEqual(p.baselineInfo[0]?.saved, first)
         XCTAssertEqual(p.baselineInfo[1]?.saved, MPPTime.date(2026, 9, 7, 14))

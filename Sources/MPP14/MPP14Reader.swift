@@ -229,20 +229,6 @@ public final class MPP14File {
             return cal
         }
         project.defaultCalendar = props.text(MPP.PropsKey.defaultCalendarName)
-        // The app's shifts and holiday sets, kept beside Project's calendars.
-        if let bytes = try? root.stream(MPP.calendarSetupStream) {
-            let setups = CalendarSetup.decode(bytes)
-            if let name = project.calendar?.name, let setup = setups[name] {
-                project.calendar?.shifts = setup.shifts
-                project.calendar?.holidays = setup.holidays
-            }
-            for i in project.calendars.indices {
-                if let setup = setups[project.calendars[i].name] {
-                    project.calendars[i].shifts = setup.shifts
-                    project.calendars[i].holidays = setup.holidays
-                }
-            }
-        }
         project.currencySymbol = props.text(MPP.PropsKey.currencySymbol)
         project.currencyCode = props.text(MPP.PropsKey.currencyCode)
 
@@ -264,10 +250,33 @@ public final class MPP14File {
             project.statusDate = MPP.decodeTimestamp(raw, offset: 0)
         }
         Self.applyDocumentProperties(to: &project, root: root)
-        // Baselines past Project's eleven, and every slot's name and lock,
-        // kept by the app.
-        if let bytes = try? root.stream(MPP.extraBaselinesStream) {
-            ExtraBaselines.decode(bytes).apply(to: &project)
+        // What Project has no field for: in custom properties, or in the
+        // streams files written before kept it in. The properties are
+        // MPPKit's, not the project's, so they leave `customProperties`.
+        func appData(_ property: String, _ stream: String) -> [UInt8]? {
+            project.chunkedProperty(property) ?? (try? root.stream(stream))
+        }
+        let calendarSetup = appData(MPP.AppProperty.calendars, MPP.calendarSetupStream)
+        let extraBaselines = appData(MPP.AppProperty.baselines, MPP.extraBaselinesStream)
+        let savedColumns = appData(MPP.AppProperty.columns, MPP.viewColumnsStream)
+        project.customProperties = project.customProperties.filter { !MPP.AppProperty.isOwn($0.key) }
+        // Shifts and holiday sets, kept beside Project's calendars.
+        if let calendarSetup {
+            let setups = CalendarSetup.decode(calendarSetup)
+            if let name = project.calendar?.name, let setup = setups[name] {
+                project.calendar?.shifts = setup.shifts
+                project.calendar?.holidays = setup.holidays
+            }
+            for i in project.calendars.indices {
+                if let setup = setups[project.calendars[i].name] {
+                    project.calendars[i].shifts = setup.shifts
+                    project.calendars[i].holidays = setup.holidays
+                }
+            }
+        }
+        // Baselines past Project's eleven, and every slot's name and lock.
+        if let extraBaselines {
+            ExtraBaselines.decode(extraBaselines).apply(to: &project)
         }
         // When Project last saved each of Baseline...Baseline10. Project's
         // date wins over the app's: the file may have been re-baselined in
@@ -288,7 +297,7 @@ public final class MPP14File {
         // app's own list — which also keeps widths and columns Project's
         // table cannot hold — is used while it still agrees with that table,
         // i.e. unless the file was since changed in Project.
-        let saved = (try? root.stream(MPP.viewColumnsStream)).map {
+        let saved = savedColumns.map {
             String(decoding: $0, as: UTF8.self).split(separator: ",").map(String.init)
         }
         let entry = readEntryTableColumns()

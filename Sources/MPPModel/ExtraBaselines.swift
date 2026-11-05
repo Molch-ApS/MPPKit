@@ -94,6 +94,36 @@ public struct ExtraBaselines: Codable, Equatable, Sendable {
         current = try c.decodeIfPresent(Int.self, forKey: .current)
     }
 
+    /// The slot past Project's eleven to give up first when space runs out:
+    /// the one saved longest ago (a slot with no date first), then the lowest.
+    public var oldestExtraSlot: Int? {
+        var slots = Set<Int>()
+        for entries in [tasks, resources, assignments] {
+            for e in entries.values { slots.formUnion(e.keys.compactMap(Int.init)) }
+        }
+        return slots.filter { !Self.projectSlots.contains($0) }.min { a, b in
+            let da = info[String(a)]?.saved ?? .distantPast, db = info[String(b)]?.saved ?? .distantPast
+            return da == db ? a < b : da < db
+        }
+    }
+
+    /// The slot's dates gone from every task, resource and assignment, and
+    /// its info with them.
+    public mutating func remove(slot: Int) {
+        let key = String(slot)
+        func drop(_ e: inout [String: [String: Baseline]]) {
+            for k in Array(e.keys) {
+                e[k]?[key] = nil
+                if e[k]?.isEmpty == true { e[k] = nil }
+            }
+        }
+        drop(&tasks)
+        drop(&resources)
+        drop(&assignments)
+        info[key] = nil
+        if current == slot { current = nil }
+    }
+
     public func encode() -> [UInt8]? {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -111,7 +141,7 @@ public struct ExtraBaselines: Codable, Equatable, Sendable {
 /// What Project keeps about a baseline besides its dates, and more: a name, a
 /// lock, when it was saved and by whom. Project itself records only the
 /// saved date, for slots 0...10 (`BaselineSaved`); the rest lives in the
-/// app's stream (`ExtraBaselines.info`).
+/// file's custom properties (`ExtraBaselines.info`).
 public struct BaselineInfo: Codable, Equatable, Sendable {
     public var name: String?
     public var saved: Date?
