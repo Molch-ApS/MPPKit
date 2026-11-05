@@ -500,7 +500,7 @@ public final class MPP14File {
             task.durationUnits = MPP.unitCodes[unitCode] ?? "d"
             task.estimated = (unitsWord & MPP.estimatedFlag) != 0
             for (n, id) in MPP.OutlineCode.value.enumerated() {
-                guard let raw = k.varBytes(Int(uid), id), raw.count >= 22, raw[0] == 0x01, raw[1] == 0x07 else { continue }
+                guard let raw = k.varBytes(Int(uid), id), raw.count >= 22, raw[0] == 0x01 else { continue }
                 task.outlineCodeValues[n + 1] = Array(raw[6..<22])
             }
             if let raw = k.varBytes(Int(uid), MPP.TaskField.notes), !raw.isEmpty {

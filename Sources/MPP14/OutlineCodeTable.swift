@@ -19,7 +19,7 @@ import MPPModel
 extension MPP {
     /// Task outline codes: Outline Code1...10. The value is a var field
     /// (`01 07`, the `u32` row of its value in the lookup table, the value's
-    /// GUID, 4 bytes); the definition, in `TBkndTask/Props` key 0x04400001,
+    /// GUID, 4 bytes; some Project 2013 files have `01 04`); the definition, in `TBkndTask/Props` key 0x04400001,
     /// has the field's lookup table GUID at byte 36.
     public enum OutlineCode {
         public static let value: [UInt32] = (0..<10).map { 0x1A1 + 2 * $0 }
