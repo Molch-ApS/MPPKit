@@ -60,6 +60,7 @@ for uid, a in xt.items():
     if b["wbs"] is not None and a["wbs"] != b["wbs"]: bad(f"{L} wbs", a["wbs"], b["wbs"])
     if abs(hours(a["work"]) - b["workHours"]) > 1e-2: bad(f"{L} work hours", hours(a["work"]), b["workHours"])
     if {str(k): v for k, v in a["text"].items()} != b["text"]: bad(f"{L} text", a["text"], b["text"])
+    if {str(k): v for k, v in a.get("outlineCodes", {}).items()} != b.get("outlineCodes", {}): bad(f"{L} outline codes", a.get("outlineCodes"), b.get("outlineCodes"))
     if {str(k): v for k, v in a["numbers"].items()} != {k: v for k, v in b["numbers"].items() if v != 0}: bad(f"{L} numbers", a["numbers"], b["numbers"])
     if {str(k): v for k, v in a["dates"].items()} != b["dates"]: bad(f"{L} dates", a["dates"], b["dates"])
     if {str(k): v for k, v in a["flags"].items()} != {k: v for k, v in b["flags"].items() if v}: bad(f"{L} flags", a["flags"], b["flags"])

@@ -65,6 +65,20 @@ public enum SampleProject {
         p.tasks = tasks
         p.relations = relations
         p.assignments = assignments
+        // Outline Code1 with a tree two levels deep, set on two tasks.
+        func guid(_ n: UInt8) -> [UInt8] { [0x4F, 0x43, 0x31, n] + [UInt8](repeating: 0, count: 11) + [n] }
+        p.outlineCodeDefinitions[1] = OutlineCodeDefinition(listGUID: guid(0), values: [
+            OutlineCodeValue(guid: guid(1), name: "Site"),
+            OutlineCodeValue(guid: guid(2), name: "North", parent: guid(1)),
+            OutlineCodeValue(guid: guid(3), name: "South", description: "Ground floor", parent: guid(1)),
+            OutlineCodeValue(guid: guid(4), name: "Remote"),
+        ])
+        for (uid, value, path) in [(3, guid(2), "Site.North"), (8, guid(4), "Remote")] {
+            if let i = p.tasks.firstIndex(where: { $0.uid == uid }) {
+                p.tasks[i].outlineCodeValues[1] = value
+                p.tasks[i].outlineCodes[1] = path
+            }
+        }
 
         do {
             try Scheduler.schedule(&p)

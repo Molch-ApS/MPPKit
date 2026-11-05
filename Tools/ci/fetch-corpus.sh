@@ -56,10 +56,13 @@ files=(
     mpp14viewstate.mpp
     ResourceIdAndUniqueId-project2010-mpp14.mpp
     ResourceIdAndUniqueId-project2013-mpp14.mpp
+    generated/task-outlinecodes/task-outlinecodes-project2010-mpp14.mpp
+    generated/task-outlinecodes/task-outlinecodes-project2013-mpp14.mpp
 )
 mkdir -p "$dir"
 for f in "${files[@]}"; do
-    [[ -s "$dir/$f" ]] && continue
-    curl -fsSL --retry 3 -o "$dir/$f" "https://raw.githubusercontent.com/joniles/mpxj/$commit/junit/data/$f"
+    out="$dir/$(basename "$f")"
+    [[ -s "$out" ]] && continue
+    curl -fsSL --retry 3 -o "$out" "https://raw.githubusercontent.com/joniles/mpxj/$commit/junit/data/$f"
 done
 echo "${#files[@]} Project-saved files in $dir"

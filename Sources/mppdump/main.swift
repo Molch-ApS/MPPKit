@@ -572,7 +572,7 @@ case "json":
          "percentComplete": t.percentComplete, "actualStart": iso(t.actualStart),
          "actualFinish": iso(t.actualFinish), "workHours": t.workHours, "priority": t.priority,
          "taskType": t.taskType, "effortDriven": t.effortDriven, "created": iso(t.created),
-         "text": keyed(t.text) { $0 }, "numbers": keyed(t.numbers) { $0 },
+         "text": keyed(t.text) { $0 }, "outlineCodes": keyed(t.outlineCodes) { $0 }, "numbers": keyed(t.numbers) { $0 },
          "dates": keyed(t.dateFields) { iso($0) }, "flags": keyed(t.flags) { $0 },
          "baselines": baselines(t.baselines)]
     }

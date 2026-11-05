@@ -212,12 +212,14 @@ public final class MPP14File {
         }
         project.tasks = tasks
         project.resources = resources
-        project.assignments = assignments
+        // Nor is an assignment to a task that is gone.
+        let taskUIDs = Set(tasks.map(\.uid))
+        project.assignments = assignments.filter { taskUIDs.contains($0.taskUID) }
         // A link to a task that is gone (deleted, its record left behind) is
         // not part of the plan; Project ignores it too.
-        let uids = Set(tasks.map(\.uid))
-        project.relations = relations.filter { uids.contains($0.predUID) && uids.contains($0.succUID) }
+        project.relations = relations.filter { taskUIDs.contains($0.predUID) && taskUIDs.contains($0.succUID) }
         project.fieldAliases = readTaskFieldAliases()
+        readOutlineCodes(&project)
         project.calendar = calendars.standard
         project.calendars = calendars.base
         // A resource calendar is named after its resource.
@@ -393,6 +395,34 @@ public final class MPP14File {
 
     // MARK: - Custom fields
 
+    /// Task outline codes with a lookup table: each definition's list GUID
+    /// from `TBkndTask/Props` key 0x04400001, its values from the lookup
+    /// tables, and each task's value as its path.
+    private func readOutlineCodes(_ project: inout Project) {
+        guard let raw = try? root.stream(path: "\(MPP.projectStorage)/TBkndTask/Props"),
+              let defs = MPP.parseProps(raw).values[MPP14Template.fieldDefinitionsKey],
+              let d = MPP14Template.definitionRecords(defs),
+              let table = OutlineCodeTable(root: root) else { return }
+        for i in 0..<d.count {
+            let at = d.start + i * d.size
+            guard let id = BinaryReader(defs).u32(at: at), id >> 16 == UInt32(MPP.FieldClass.task),
+                  let n = MPP.OutlineCode.definition.firstIndex(of: id & 0xFFFF) else { continue }
+            let list = Array(defs[at + 36..<at + 52])
+            guard list.contains(where: { $0 != 0 }) else { continue }
+            project.outlineCodeDefinitions[n + 1] = table.definition(list: list)
+        }
+        for i in project.tasks.indices {
+            for (n, guid) in project.tasks[i].outlineCodeValues {
+                guard let def = project.outlineCodeDefinitions[n] else { continue }
+                if let path = def.path(of: guid) {
+                    project.tasks[i].outlineCodes[n] = path
+                } else {
+                    project.tasks[i].outlineCodeValues[n] = nil
+                }
+            }
+        }
+    }
+
     /// Values of custom-field lookup tables, by value id: var entry 22 of each
     /// `TBkndOutlCode` record (entry 23 is the value's description).
     private lazy var lookupValues: [Int: String] = {
@@ -457,6 +487,9 @@ public final class MPP14File {
         for i in 0..<k.records.count {
             // Deleted-task stubs and other placeholders carry no fields at all.
             if k.records[i].count <= 100 { continue }
+            // A task deleted in Project can keep a full record; bit 0x02 of
+            // its meta flags marks it, as for links. Read, it was a blank row.
+            if i < k.metas.count, let flags = BinaryReader(k.metas[i]).u32(at: 0), flags & 0x02 != 0 { continue }
             guard let uid = k.u32(i, MPP.TaskField.uniqueID), uid != 0 else { continue }
             // uid 0 is the project summary row.
             guard let start = k.timestamp(i, MPP.TaskField.start),
@@ -479,6 +512,10 @@ public final class MPP14File {
             // Summary rows carry a units word of their own (0x15), not a unit.
             task.durationUnits = MPP.unitCodes[unitCode] ?? "d"
             task.estimated = (unitsWord & MPP.estimatedFlag) != 0
+            for (n, id) in MPP.OutlineCode.value.enumerated() {
+                guard let raw = k.varBytes(Int(uid), id), raw.count >= 22, raw[0] == 0x01 else { continue }
+                task.outlineCodeValues[n + 1] = Array(raw[6..<22])
+            }
             if let raw = k.varBytes(Int(uid), MPP.TaskField.notes), !raw.isEmpty {
                 task.notes = MPP14File.decodeRTFNotes(raw)
             }
@@ -605,6 +642,7 @@ public final class MPP14File {
                             ("date", MPP.CustomField.date), ("flag", MPP.CustomField.flag)] {
             for (i, id) in ids.enumerated() { byNative[id] = "\(kind)\(i + 1)" }
         }
+        for (i, id) in MPP.OutlineCode.definition.enumerated() { byNative[id] = "outlinecode\(i + 1)" }
         var out: [String: String] = [:]
         var offset = 12
         for _ in 0..<min(Int(count), 512) {
