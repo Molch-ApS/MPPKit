@@ -134,6 +134,58 @@ public struct Baseline: Equatable, Sendable {
     }
 }
 
+/// One value in an outline code's lookup table.
+public struct OutlineCodeValue: Equatable, Sendable {
+    /// 16 bytes, on-disk order. Stays the same across saves, so it is the
+    /// way to refer to a value.
+    public var guid: [UInt8]
+    public var name: String
+    public var description: String
+    /// The value one level up, nil at the top.
+    public var parent: [UInt8]?
+
+    public init(guid: [UInt8], name: String, description: String = "", parent: [UInt8]? = nil) {
+        self.guid = guid
+        self.name = name
+        self.description = description
+        self.parent = parent
+    }
+}
+
+/// A task outline code's lookup table: a tree of values, each level shown
+/// after its parent with a "." between them. `values` is in table order,
+/// each value after its parent; that order is the order Project lists them in.
+public struct OutlineCodeDefinition: Equatable, Sendable {
+    /// 16 bytes; ties the table to its field.
+    public var listGUID: [UInt8]
+    public var values: [OutlineCodeValue]
+
+    public init(listGUID: [UInt8], values: [OutlineCodeValue] = []) {
+        self.listGUID = listGUID
+        self.values = values
+    }
+
+    public func value(_ guid: [UInt8]) -> OutlineCodeValue? { values.first { $0.guid == guid } }
+
+    /// How deep a value sits: 1 at the top.
+    public func level(of guid: [UInt8]) -> Int {
+        var level = 0, current: [UInt8]? = guid, seen = Set<[UInt8]>()
+        while let g = current, let v = value(g), seen.insert(g).inserted { level += 1; current = v.parent }
+        return level
+    }
+
+    /// The value's path as Project shows it: "Ward A.Room 2".
+    public func path(of guid: [UInt8]) -> String? {
+        guard value(guid) != nil else { return nil }
+        var names: [String] = [], current: [UInt8]? = guid, seen = Set<[UInt8]>()
+        while let g = current, let v = value(g), seen.insert(g).inserted { names.insert(v.name, at: 0); current = v.parent }
+        return names.joined(separator: ".")
+    }
+
+    /// The deepest level any value is at.
+    public var depth: Int { values.map { level(of: $0.guid) }.max() ?? 0 }
+}
+
 /// How a task's duration, work and units relate when one of them changes.
 public enum TaskType: String, CaseIterable, Sendable {
     case fixedUnits = "fixed_units"
@@ -230,8 +282,13 @@ public struct ProjectTask: Identifiable, Equatable, Sendable {
     public var dateFields: [Int: Date] = [:]
     /// Flag1...Flag20, keyed by field number.
     public var flags: [Int: Bool] = [:]
-    /// Outline codes such as `Outline Code1`, keyed by field number.
+    /// Outline codes such as `Outline Code1`, keyed by field number: the
+    /// value's path as Project shows it, its levels joined by ".".
     public var outlineCodes: [Int: String] = [:]
+    /// The value each task outline code is set to, by field number: the
+    /// value's GUID in `Project.outlineCodeDefinitions[field]`. The writer
+    /// writes these for every outline code the project defines.
+    public var outlineCodeValues: [Int: [UInt8]] = [:]
     public var baselines: [Int: Baseline] = [:]
     /// 16 bytes in on-disk (little-endian) order; empty lets the writer mint one.
     public var guid: [UInt8] = []
@@ -447,6 +504,11 @@ public struct Project: Sendable, Equatable {
     public var manager: String?
     public var company: String?
     public var category: String?
+
+    /// Task outline codes with a lookup table, by field number (1 for
+    /// Outline Code1). The writer saves each one's table as the tree it is;
+    /// outline codes the project doesn't define are kept as Project wrote them.
+    public var outlineCodeDefinitions: [Int: OutlineCodeDefinition] = [:]
 
     public var statusDate: Date?
     /// Project's "Tasks are critical if slack is less than or equal to", in
