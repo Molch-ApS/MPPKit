@@ -53,6 +53,52 @@ final class EditingTests: XCTestCase {
         XCTAssertEqual(p.task(uid: 5)?.start, p.start)   // the rest stay put
     }
 
+    /// Fixed work: duration = work ÷ units ÷ hours per day. 6 person-days
+    /// take 3 days for two people and 2 days for three.
+    func testFixedWorkDurationFollowsUnits() throws {
+        var p = plan()
+        let i = p.tasks.firstIndex { $0.uid == 2 }!
+        p.tasks[i].taskType = TaskType.fixedWork.rawValue
+        p.setUnits(2, taskUID: 2, resourceUID: 1)
+        p.setWork(48, of: 2)
+        XCTAssertEqual(p.task(uid: 2)?.durationDays, 3)
+        p.setUnits(3, taskUID: 2, resourceUID: 1)
+        XCTAssertEqual(p.task(uid: 2)?.durationDays, 2)
+        XCTAssertEqual(p.task(uid: 2)?.workHours, 48)
+
+        // A second resource shares the work.
+        p.setResources([("Crew", nil), ("Helper", 1)], of: 2)
+        XCTAssertEqual(p.task(uid: 2)?.durationDays ?? 0, 1.5, accuracy: 1e-9)
+        XCTAssertEqual(p.derivedWorkHours(of: 2), 48, accuracy: 1e-9)
+
+        // A new duration keeps the work and changes the units.
+        p.setDuration(4, of: 2)
+        XCTAssertEqual(p.assignedUnits(of: 2), 1.5, accuracy: 1e-9)
+        XCTAssertEqual(p.derivedWorkHours(of: 2), 48, accuracy: 1e-9)
+
+        // The scheduler only places it; it never changes the duration.
+        try Scheduler.schedule(&p)
+        XCTAssertEqual(p.task(uid: 2)?.durationDays, 4)
+        XCTAssertEqual(p.task(uid: 2)?.finish, MPPTime.date(2026, 1, 8, 17))
+    }
+
+    /// The other task types keep their duration when units change, and a
+    /// fixed-duration task meets new work with new units.
+    func testOtherTaskTypesKeepTheirDuration() {
+        var p = plan()
+        p.setUnits(2, taskUID: 2, resourceUID: 1)
+        XCTAssertEqual(p.task(uid: 2)?.durationDays, 2)
+        XCTAssertEqual(p.task(uid: 2)?.workHours, 32)
+        p.setWork(16, of: 2)
+        XCTAssertEqual(p.task(uid: 2)?.durationDays, 1)
+
+        let i = p.tasks.firstIndex { $0.uid == 2 }!
+        p.tasks[i].taskType = TaskType.fixedDuration.rawValue
+        p.setWork(32, of: 2)
+        XCTAssertEqual(p.task(uid: 2)?.durationDays, 1)
+        XCTAssertEqual(p.assignedUnits(of: 2), 4, accuracy: 1e-9)
+    }
+
     func testSetResourcesByName() {
         var p = plan()
         p.setResources([("crew", 0.5), ("Electrician", nil)], of: 3)

@@ -70,6 +70,26 @@ final class MPP14WriterTests: XCTestCase {
         XCTAssertEqual(read.tasks[0].text[2], "Nor this")
     }
 
+    /// A fixed-work task with a crew of two: written as Project keeps it
+    /// (type, 3 days, 48 hours, 200%) and read back the same.
+    func testFixedWorkRoundTrips() throws {
+        var p = Project(title: "Fixed work", start: MPPTime.date(2026, 1, 5, 8))
+        p.tasks = [ProjectTask(uid: 1, name: "Ward A")]
+        p.tasks[0].taskType = TaskType.fixedWork.rawValue
+        p.resources = [Resource(uid: 1, name: "CAR1")]
+        p.assignments = [Assignment(taskUID: 1, resourceUID: 1, units: 2)]
+        p.setWork(48, of: 1)
+        try Scheduler.schedule(&p)
+        let template = try MPP14Template.neutralized(try Fixture.bytes())
+        let read = try MPP14File(bytes: try MPP14Writer(template: template).build(p)).readProject()
+        let t = try XCTUnwrap(read.task(uid: 1))
+        XCTAssertEqual(t.taskType, "fixed_work")
+        XCTAssertEqual(t.durationDays, 3)
+        XCTAssertEqual(t.workHours, 48)
+        XCTAssertEqual(read.assignments.first?.units, 2)
+        XCTAssertEqual(read.assignments.first?.workHours, 48)
+    }
+
     /// Durations and lags are stored in minutes but modelled in days of the
     /// file's own length. On a 7.5-hour day, a reader or writer that assumed
     /// 8 hours would return every duration 6% off.
