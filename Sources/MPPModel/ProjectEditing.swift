@@ -171,6 +171,87 @@ extension Project {
         }
         assignments.removeAll { $0.taskUID == uid }
         assignments.append(contentsOf: keep)
+        // A fixed-work task keeps its work: new units change its duration.
+        if let i = tasks.firstIndex(where: { $0.uid == uid }), tasks[i].taskType == TaskType.fixedWork.rawValue,
+           tasks[i].workHours > 0 {
+            setWork(tasks[i].workHours, of: uid)
+        }
+    }
+
+    // MARK: Work, units and duration
+
+    /// The units of a task's work resources added up: 2.0 for two people
+    /// full time.
+    public func assignedUnits(of uid: Int) -> Double {
+        let work = Set(resources.filter { $0.type == "work" }.map(\.uid))
+        return assignments.filter { $0.taskUID == uid && work.contains($0.resourceUID) }.reduce(0) { $0 + $1.units }
+    }
+
+    /// A task's work in hours from its duration and units, as the writer
+    /// stores it: duration × units × hours per day.
+    public func derivedWorkHours(of uid: Int) -> Double {
+        guard let t = task(uid: uid) else { return 0 }
+        return t.durationDays * Double(minutesPerDay) / 60 * assignedUnits(of: uid)
+    }
+
+    /// Set a task's work, as typing it in Project's Work column does. A
+    /// fixed-units or fixed-work task changes its duration (work ÷ units ÷
+    /// hours per day); a fixed-duration task changes its units instead. A
+    /// task without resources only records the work.
+    public mutating func setWork(_ hours: Double, of uid: Int) {
+        guard let i = tasks.firstIndex(where: { $0.uid == uid }), !isSummary(uid) else { return }
+        let hours = max(0, hours)
+        tasks[i].workHours = hours
+        let units = assignedUnits(of: uid)
+        guard units > 0 else { return }
+        let hoursPerDay = Double(minutesPerDay) / 60
+        if tasks[i].taskType == TaskType.fixedDuration.rawValue {
+            let old = derivedWorkHours(of: uid)
+            guard old > 0 else { return }
+            scaleUnits(of: uid, by: hours / old)
+        } else {
+            tasks[i].durationDays = hours / (units * hoursPerDay)
+        }
+    }
+
+    /// Set one assignment's units. A fixed-work task keeps its work, so its
+    /// duration changes; other tasks keep their duration and their work
+    /// follows. 2 people on 48 hours of fixed work take 3 days, 3 people 2.
+    public mutating func setUnits(_ units: Double, taskUID: Int, resourceUID: Int) {
+        guard let a = assignments.firstIndex(where: { $0.taskUID == taskUID && $0.resourceUID == resourceUID }),
+              let i = tasks.firstIndex(where: { $0.uid == taskUID }) else { return }
+        let work = tasks[i].taskType == TaskType.fixedWork.rawValue ? workHours(of: taskUID) : nil
+        assignments[a].units = max(0, units)
+        if let work { setWork(work, of: taskUID) } else { tasks[i].workHours = derivedWorkHours(of: taskUID) }
+    }
+
+    /// Set a task's duration. A fixed-work task keeps its work, so its units
+    /// change in proportion; other tasks keep their units and their work
+    /// follows.
+    public mutating func setDuration(_ days: Double, of uid: Int) {
+        guard let i = tasks.firstIndex(where: { $0.uid == uid }), !isSummary(uid) else { return }
+        let days = max(0, days)
+        if tasks[i].taskType == TaskType.fixedWork.rawValue, assignedUnits(of: uid) > 0, days > 0 {
+            let work = workHours(of: uid)
+            let old = tasks[i].durationDays
+            tasks[i].durationDays = days
+            if old > 0 { scaleUnits(of: uid, by: old / days) }
+            tasks[i].workHours = work
+        } else {
+            tasks[i].durationDays = days
+            tasks[i].workHours = derivedWorkHours(of: uid)
+        }
+    }
+
+    /// The task's work: as stored, or from its duration and units when the
+    /// file had none.
+    private func workHours(of uid: Int) -> Double {
+        let stored = task(uid: uid)?.workHours ?? 0
+        return stored > 0 ? stored : derivedWorkHours(of: uid)
+    }
+
+    private mutating func scaleUnits(of uid: Int, by factor: Double) {
+        for a in assignments.indices where assignments[a].taskUID == uid { assignments[a].units *= factor }
     }
 
     /// Move a task to start at `date`, the way dragging a bar does in Project:

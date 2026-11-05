@@ -1901,6 +1901,25 @@ private final class Session {
         if !doc.isEmpty, let dsi = try? root.stream("\u{5}DocumentSummaryInformation") {
             root.addStream("\u{5}DocumentSummaryInformation", OLEPropertySet.updatingStrings(dsi, doc))
         }
+        // Custom properties: the project's text ones, set by name; a text
+        // property the project no longer has is removed. Others are kept.
+        if let dsi = try? root.stream("\u{5}DocumentSummaryInformation") {
+            var updates: [String: String?] = [:]
+            var present = Set<String>()
+            for (name, value) in OLEPropertySet.userProperties(dsi) {
+                guard case .string(let text) = value else { continue }
+                present.insert(name)
+                if let new = project.customProperties[name] {
+                    if new != text { updates[name] = new }
+                } else {
+                    updates[name] = .some(nil)
+                }
+            }
+            for (name, value) in project.customProperties where !present.contains(name) { updates[name] = value }
+            if !updates.isEmpty {
+                root.addStream("\u{5}DocumentSummaryInformation", OLEPropertySet.updatingUserProperties(dsi, updates))
+            }
+        }
 
         // Props14 records where the template was saved and by whom. Only
         // values that are a saved path or exactly the template's author are
