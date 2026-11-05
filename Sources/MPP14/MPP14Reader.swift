@@ -212,11 +212,12 @@ public final class MPP14File {
         }
         project.tasks = tasks
         project.resources = resources
-        project.assignments = assignments
+        // Nor is an assignment to a task that is gone.
+        let taskUIDs = Set(tasks.map(\.uid))
+        project.assignments = assignments.filter { taskUIDs.contains($0.taskUID) }
         // A link to a task that is gone (deleted, its record left behind) is
         // not part of the plan; Project ignores it too.
-        let uids = Set(tasks.map(\.uid))
-        project.relations = relations.filter { uids.contains($0.predUID) && uids.contains($0.succUID) }
+        project.relations = relations.filter { taskUIDs.contains($0.predUID) && taskUIDs.contains($0.succUID) }
         project.fieldAliases = readTaskFieldAliases()
         project.calendar = calendars.standard
         project.calendars = calendars.base
@@ -445,6 +446,9 @@ public final class MPP14File {
         for i in 0..<k.records.count {
             // Deleted-task stubs and other placeholders carry no fields at all.
             if k.records[i].count <= 100 { continue }
+            // A task deleted in Project can keep a full record; bit 0x02 of
+            // its meta flags marks it, as for links. Read, it was a blank row.
+            if i < k.metas.count, let flags = BinaryReader(k.metas[i]).u32(at: 0), flags & 0x02 != 0 { continue }
             guard let uid = k.u32(i, MPP.TaskField.uniqueID), uid != 0 else { continue }
             // uid 0 is the project summary row.
             guard let start = k.timestamp(i, MPP.TaskField.start),

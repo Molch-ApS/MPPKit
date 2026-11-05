@@ -99,6 +99,17 @@ final class KeepTests: XCTestCase {
         try assertKept(file, saved, "TBkndRsc", [61], "resource rates")
     }
 
+    /// A task deleted in Project can leave a full record behind, marked by
+    /// its meta flags; it isn't read as a blank row, and neither is its
+    /// assignment.
+    func testDeletedTaskIsNotABlankRow() throws {
+        let p = try MPP14File(bytes: try corpus("mpp14timephasedsegmentsmanualoffsets.mpp")).readProject()
+        XCTAssertNil(p.task(uid: 22))
+        XCTAssertFalse(p.tasks.contains { $0.name.isEmpty })
+        XCTAssertFalse(p.assignments.contains { $0.taskUID == 22 })
+        XCTAssertNotNil(p.task(uid: 21))
+    }
+
     func testRecurringTasksKeepTheirPattern() throws {
         let file = try corpus("mpp14recurring.mpp")
         let saved = try save(try MPP14File(bytes: file).readProject(), over: file)
