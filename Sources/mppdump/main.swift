@@ -49,7 +49,7 @@ func usage() {
       template    turn any Project-saved file into a clean writer template: no
                   user data, no value lists, a summary task over two linked tasks
       baselines   the sample with [count] baselines (default 50), slot n moved n
-                  weeks earlier; slots past 10 go to the app's own stream
+                  weeks earlier; slots past 10 go to custom properties
       json        the whole parsed project as JSON
       check       the rules every Project-saved file keeps (meta bits); lists
                   what breaks them, exits 1 if anything does
@@ -205,7 +205,7 @@ if command == "sample" || command == "template" {
 
 // Experimental: the sample with `count` baselines (default 50), slot n moved
 // n weeks earlier so each is told apart. Slots 0...10 go to Project's fields,
-// the rest to the app's own stream.
+// the rest to custom properties.
 if command == "baselines" {
     guard args.count >= 4 else { usage(); exit(2) }
     do {

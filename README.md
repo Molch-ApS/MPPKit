@@ -129,8 +129,9 @@ Read and written:
   Text1–30, Number1–20, Date1–10, Flag1–20, baselines 0–10 with the date
   each was saved;
 - baselines past 10, without limit, and each baseline's name, lock and who
-  saved it, plus which one is current: in a stream of MPPKit's own
-  (`ProjectsBaselines`) that Project ignores;
+  saved it, plus which one is current: in custom properties of MPPKit's own
+  (`MPPKit.Baselines.000`, …), which Project keeps when it saves;
+- custom properties (File › Properties › Custom), read and written as text;
 - links: FS, SS, FF, SF with lags and leads in any unit — working, elapsed or a
   percentage of the predecessor — and links on summary tasks;
 - work resources with max units, initials, e-mail, their own calendars and
