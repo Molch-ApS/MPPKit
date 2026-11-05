@@ -47,7 +47,7 @@ func usage() {
       sample      write the all-features sample project, using any Project-saved
                   file as the template (its user data is neutralised first)
       template    turn any Project-saved file into a clean writer template: no
-                  user data, a summary task over two linked tasks
+                  user data, no value lists, a summary task over two linked tasks
       baselines   the sample with [count] baselines (default 50), slot n moved n
                   weeks earlier; slots past 10 go to the app's own stream
       json        the whole parsed project as JSON

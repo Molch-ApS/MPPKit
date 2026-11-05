@@ -20,7 +20,7 @@ import MPPModel
 ///
 /// The writer never carries a template's tasks, resources, assignments or
 /// links over, but a real schedule holds user data in places the writer keeps
-/// byte-for-byte: custom-field aliases and lookup tables, extra base calendars
+/// byte-for-byte: custom-field aliases, value lists and lookup tables, extra base calendars
 /// and their holidays, the save path the Gantt view cache remembers, and the
 /// document properties. `neutralized` replaces all of it.
 ///
@@ -94,7 +94,9 @@ public enum MPP14Template {
             root.setStream(path: "\(outline)/Var2Data", data)
         }
 
-        // 3. Custom-field aliases in each entity's Props, same length.
+        // 3. Custom-field aliases in each entity's Props, same length, and
+        // the fields' value lists. A field restricted to a list shows every
+        // value not in it as blank in Project, and the list is user data.
         var aliasCounter = 0
         for entity in ["TBkndTask", "TBkndRsc", "TBkndAssn"] {
             let path = "\(prj)/\(entity)/Props"
@@ -104,6 +106,10 @@ public enum MPP14Template {
             for key in p.order {
                 guard var value = p.values[key] else { continue }
                 if renameAliases(&value, counter: &aliasCounter) {
+                    p.values[key] = value
+                    changed = true
+                }
+                if key == fieldDefinitionsKey, dropValueLists(&value) {
                     p.values[key] = value
                     changed = true
                 }
@@ -184,6 +190,47 @@ public enum MPP14Template {
     private static func utf16(_ s: String) -> [UInt8] { s.utf16.flatMap { [UInt8($0 & 0xFF), UInt8($0 >> 8)] } }
 
     private static func littleEndian(_ v: UInt32) -> [UInt8] { withUnsafeBytes(of: v.littleEndian) { Array($0) } }
+
+    /// The Props key holding custom-field names and definitions.
+    static let fieldDefinitionsKey: UInt32 = 0x0440_0001
+
+    /// The definition records of a field-definitions value: three name
+    /// sections (`u32` length, then that many bytes), then `u32` count, `u32`
+    /// byte size and the records. Nil when the value doesn't fit that layout.
+    static func definitionRecords(_ value: [UInt8]) -> (start: Int, size: Int, count: Int)? {
+        let r = BinaryReader(value)
+        var pos = 0
+        for _ in 0..<3 {
+            guard let len = r.u32(at: pos).map(Int.init), pos + 4 + len <= value.count else { return nil }
+            pos += 4 + len
+        }
+        guard let count = r.u32(at: pos).map(Int.init), let size = r.u32(at: pos + 4).map(Int.init),
+              count > 0, size % count == 0, size / count >= 52, pos + 8 + size <= value.count else { return nil }
+        return (pos + 8, size / count, count)
+    }
+
+    /// The field ids whose definition has a value list: the has-value-list
+    /// flag (record bytes 16..<20) set, or a list GUID (bytes 36..<52).
+    static func valueListFields(_ value: [UInt8]) -> [UInt32] {
+        guard let d = definitionRecords(value) else { return [] }
+        return (0..<d.count).compactMap { i in
+            let at = d.start + i * d.size
+            let hasList = value[at + 16..<at + 20].contains { $0 != 0 } || value[at + 36..<at + 52].contains { $0 != 0 }
+            return hasList ? BinaryReader(value).u32(at: at) : nil
+        }
+    }
+
+    /// Clear every definition's value list in place, leaving the record as
+    /// the writer makes one for a newly named field. Same length.
+    static func dropValueLists(_ value: inout [UInt8]) -> Bool {
+        guard !valueListFields(value).isEmpty, let d = definitionRecords(value) else { return false }
+        for i in 0..<d.count {
+            let at = d.start + i * d.size
+            value.replaceSubrange(at + 16..<at + 20, with: [UInt8](repeating: 0, count: 4))
+            value.replaceSubrange(at + 36..<at + 52, with: [UInt8](repeating: 0, count: 16))
+        }
+        return true
+    }
 
     /// Rename the strings of an alias block in place.
     ///

@@ -11,6 +11,7 @@
 import XCTest
 import Foundation
 import MPPKit
+@testable import MPP14
 
 /// The writer, checked by writing the all-features sample over the fixture
 /// template and reading it back. Skips without a fixture, like the reader tests.
@@ -47,6 +48,26 @@ final class MPP14WriterTests: XCTestCase {
 
         let (expected, bytes) = try writeSample(template: blank)
         assertSameProject(try MPP14File(bytes: bytes).readProject(), expected)
+    }
+
+    /// A text field restricted to a value list shows every value not in the
+    /// list as blank in Project, so a template keeps no value lists.
+    func testTemplatesDropValueLists() throws {
+        func listed(_ bytes: [UInt8]) throws -> [UInt32] {
+            let raw = try MPP14File(bytes: bytes).root.stream(path: "\(MPP.projectStorage)/TBkndTask/Props")
+            return MPP14Template.valueListFields(MPP.parseProps(raw).values[MPP14Template.fieldDefinitionsKey] ?? [])
+        }
+        let fixture = try Fixture.bytes()
+        if try listed(fixture).isEmpty { throw XCTSkip("the fixture has no value lists") }
+        XCTAssertEqual(try listed(try MPP14Template.neutralized(fixture)), [])
+        let blank = try MPP14Template.makeBlank(from: fixture)
+        XCTAssertEqual(try listed(blank), [])
+
+        var p = SampleProject.make()
+        p.tasks[0].text = [1: "Not in any list", 2: "Nor this"]
+        let read = try MPP14File(bytes: try MPP14Writer(template: blank).build(p)).readProject()
+        XCTAssertEqual(read.tasks[0].text[1], "Not in any list")
+        XCTAssertEqual(read.tasks[0].text[2], "Nor this")
     }
 
     /// Durations and lags are stored in minutes but modelled in days of the
@@ -464,7 +485,13 @@ final class MPP14WriterTests: XCTestCase {
         XCTAssertEqual(Set(before.keys), Set(after.keys))
         let rebuilt: Set<String> = ["   114/TBkndCal/VarMeta", "   114/TBkndCal/Var2Data", "   114/Props",
                                     "\u{5}SummaryInformation", "\u{5}DocumentSummaryInformation"]
-        for (path, old) in before {
+        for (path, original) in before {
+            // Value lists are cleared in place: expect that, then text only.
+            var old = original
+            if path.hasSuffix("/Props"), var value = MPP.parseProps(old).values[MPP14Template.fieldDefinitionsKey],
+               let at = old.firstRange(of: value)?.lowerBound, MPP14Template.dropValueLists(&value) {
+                old.replaceSubrange(at..<at + value.count, with: value)
+            }
             guard let new = after[path], new != old, !rebuilt.contains(path) else { continue }
             XCTAssertEqual(new.count, old.count, "\(path.debugDescription) changed length")
             guard new.count == old.count else { continue }
