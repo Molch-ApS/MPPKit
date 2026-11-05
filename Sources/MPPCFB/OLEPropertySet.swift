@@ -269,7 +269,10 @@ public enum OLEPropertySet {
         var names = dictionary(sections[i])
         let codePage = sections[i].codePage
         for (name, value) in updates.sorted(by: { $0.key < $1.key }) {
-            let existing = names.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }?.pid
+            // Names match regardless of case, as in Project; `lowercased()`
+            // because the WebAssembly Foundation has no caseInsensitiveCompare.
+            let key = name.lowercased()
+            let existing = names.first { $0.name.lowercased() == key }?.pid
             if let value {
                 let pid = existing ?? max(1, sections[i].order.max() ?? 1, names.map(\.pid).max() ?? 1) + 1
                 if existing == nil { names.append((pid, name)) }
