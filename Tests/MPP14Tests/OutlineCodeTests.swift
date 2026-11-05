@@ -89,6 +89,16 @@ final class OutlineCodeTests: XCTestCase {
         XCTAssertEqual(back.task(uid: p.tasks[2].uid)?.outlineCodeValues[3], imaging)
         XCTAssertNil(back.task(uid: p.tasks[3].uid)?.outlineCodes[3])
 
+        // The new values' rows (the last five 14-byte records) fit in 16
+        // bits, as MPXJ reads them, and follow the template's own rows.
+        let data = try CFBFile(bytes: written).root.stream(path: "   114/TBkndOutlCode/FixedData")
+        let rows = (0..<5).map { i -> UInt32 in
+            let at = data.count - (5 - i) * 14
+            return data[at..<at + 4].reversed().reduce(0) { $0 << 8 | UInt32($1) }
+        }
+        XCTAssertTrue(rows.allSatisfy { $0 > 0 && $0 < 0x10000 }, "\(rows)")
+        XCTAssertEqual(rows, (0..<5).map { rows[0] + UInt32($0) })
+
         // Changed again over the written file: a value renamed, one removed,
         // one added; the rows that stay keep their places.
         var next = back

@@ -135,7 +135,8 @@ struct OutlineCodeTable {
         let doomed = Set(records.indices.filter { isValue(records[$0]) && lists.contains(list(records[$0])) })
         records = records.indices.filter { !doomed.contains($0) }.map { records[$0] }
         vars.removeAll { dropped.contains($0.uid) }
-        var next = max(records.map(row).max() ?? 0, old.values.max() ?? 0) + 1
+        // Only value rows count: the header records hold 0xFFFF000n there.
+        var next = max(records.filter(isValue).map(row).max() ?? 0, old.values.max() ?? 0) + 1
         var rows: [[UInt8]: Int] = [:]
         for def in definitions {
             for v in def.values {
