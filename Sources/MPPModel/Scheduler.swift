@@ -270,11 +270,14 @@ public enum Scheduler {
                     let rel = project.relations[i]
                     let e = ends(of: i)
                     guard let sls = e.start, let slf = e.finish else { continue }
+                    // The lag runs in the successor's working time, back as
+                    // forward: Project does both ways.
+                    let swt = try index[rel.succUID].map { try time(for: project.tasks[$0]) } ?? wt
                     switch rel.type {
-                    case "SS": startCap = min(startCap ?? .distantFuture, lagged(sls, rel, sign: -1, wt: wt))
-                    case "FF": lf = min(lf, lagged(slf, rel, sign: -1, wt: wt))
-                    case "SF": startCap = min(startCap ?? .distantFuture, lagged(slf, rel, sign: -1, wt: wt))
-                    default: lf = min(lf, lagged(sls, rel, sign: -1, wt: wt))
+                    case "SS": startCap = min(startCap ?? .distantFuture, lagged(sls, rel, sign: -1, wt: swt))
+                    case "FF": lf = min(lf, lagged(slf, rel, sign: -1, wt: swt))
+                    case "SF": startCap = min(startCap ?? .distantFuture, lagged(slf, rel, sign: -1, wt: swt))
+                    default: lf = min(lf, lagged(sls, rel, sign: -1, wt: swt))
                     }
                 }
                 // A deadline is a late finish the plan has promised: Project
