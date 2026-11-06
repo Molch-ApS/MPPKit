@@ -80,4 +80,96 @@ final class CustomPropertiesTests: XCTestCase {
         let again = try MPP14File(bytes: try MPP14Writer(template: first).build(read)).readProject()
         XCTAssertEqual(again.customProperties, ["Plan.000": "eJzLSM3JyVcozy/KSQEAGgQEXQ==", "Plan.001": "more"])
     }
+
+    // MARK: Properties linked to content
+
+    /// The blank template's `DocumentSummaryInformation`: seven properties
+    /// linked to content (% Complete, Cost, …), each a value at its id and
+    /// its source at the id plus the link flag.
+    private func templateDSI() throws -> [UInt8] {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Samples/Blank-Template.mpp")
+        return try MPP14File(bytes: [UInt8](try Data(contentsOf: url))).root.stream("\u{5}DocumentSummaryInformation")
+    }
+
+    /// The user-defined section's property ids, and its names by id
+    /// (code page 1252: one byte a character, names not padded).
+    private func ids(_ bytes: [UInt8]) -> (ids: Set<UInt32>, names: [UInt32: String]) {
+        func u32(_ at: Int) -> UInt32 { UInt32(bytes[at]) | UInt32(bytes[at + 1]) << 8 | UInt32(bytes[at + 2]) << 16 | UInt32(bytes[at + 3]) << 24 }
+        let section = Int(u32(28 + 20 + 16))
+        var ids = Set<UInt32>(), names: [UInt32: String] = [:]
+        for k in 0..<Int(u32(section + 4)) {
+            let entry = section + 8 + 8 * k
+            ids.insert(u32(entry))
+            guard u32(entry) == 0 else { continue }
+            var q = section + Int(u32(entry + 4))
+            let n = Int(u32(q)); q += 4
+            for _ in 0..<n {
+                let length = Int(u32(q + 4))
+                names[u32(q)] = String(decoding: bytes[(q + 8)..<(q + 8 + length)].prefix { $0 != 0 }, as: UTF8.self)
+                q += 8 + length
+            }
+        }
+        return (ids, names)
+    }
+
+    func testLinkedPropertiesAreProjects() throws {
+        let dsi = try templateDSI()
+        XCTAssertEqual(strings(dsi), [:], "linked properties aren't the plan's")
+        let before = ids(dsi)
+        XCTAssertTrue(before.ids.contains(5 | OLEPropertySet.linkFlag))
+
+        // A new value takes the next value id, never one with the link flag.
+        let bytes = OLEPropertySet.updatingUserProperties(dsi, ["Client": "Northfield", "Planlagt slutdato": nil])
+        XCTAssertEqual(strings(bytes), ["Client": "Northfield"])
+        let after = ids(bytes)
+        let client = try XCTUnwrap(after.names.first { $0.value == "Client" }?.key)
+        XCTAssertEqual(client & OLEPropertySet.linkFlag, 0)
+        XCTAssertFalse(after.ids.contains(client | OLEPropertySet.linkFlag), "no link is left at its id")
+        // Every linked property is kept, value and source.
+        XCTAssertTrue(before.ids.isSubset(of: after.ids))
+        XCTAssertEqual(after.names.filter { $0.value != "Client" }, before.names)
+    }
+
+    /// MPPKit before 0.5.4 gave new values ids after a link's: they're read,
+    /// and the next write moves them to values' ids.
+    func testValuesNumberedAsLinksMove() throws {
+        var bytes = OLEPropertySet.updatingUserProperties(try templateDSI(), ["Client": "Northfield", "Phase": "2"])
+        let (_, names) = ids(bytes)
+        for (id, name) in names where ["Client", "Phase"].contains(name) {
+            bytes = Self.renumber(bytes, id, id | OLEPropertySet.linkFlag)
+        }
+        XCTAssertTrue(ids(bytes).names.keys.contains { $0 & OLEPropertySet.linkFlag != 0 }, "set up as before 0.5.4")
+        XCTAssertEqual(strings(bytes), ["Client": "Northfield", "Phase": "2"])
+
+        let moved = OLEPropertySet.updatingUserProperties(bytes, [:])
+        XCTAssertEqual(strings(moved), ["Client": "Northfield", "Phase": "2"])
+        XCTAssertFalse(ids(moved).names.keys.contains { $0 & OLEPropertySet.linkFlag != 0 })
+        // Nothing to move: left as it is.
+        XCTAssertEqual(OLEPropertySet.updatingUserProperties(moved, [:]), moved)
+    }
+
+    /// Changes property `from` to `to` in the user-defined section: its
+    /// entry in the id table and in the dictionary (code page 1252, so the
+    /// dictionary's names aren't padded).
+    private static func renumber(_ bytes: [UInt8], _ from: UInt32, _ to: UInt32) -> [UInt8] {
+        var b = bytes
+        func u32(_ at: Int) -> UInt32 { UInt32(b[at]) | UInt32(b[at + 1]) << 8 | UInt32(b[at + 2]) << 16 | UInt32(b[at + 3]) << 24 }
+        func put(_ at: Int, _ v: UInt32) { for k in 0..<4 { b[at + k] = UInt8(truncatingIfNeeded: v >> (8 * k)) } }
+        let section = Int(u32(28 + 20 + 16))
+        let count = Int(u32(section + 4))
+        for k in 0..<count {
+            let entry = section + 8 + 8 * k
+            if u32(entry) == from { put(entry, to) }
+            if u32(entry) == 0 {
+                var q = section + Int(u32(entry + 4))
+                let n = Int(u32(q)); q += 4
+                for _ in 0..<n {
+                    if u32(q) == from { put(q, to) }
+                    q += 8 + Int(u32(q + 4))
+                }
+            }
+        }
+        return b
+    }
 }

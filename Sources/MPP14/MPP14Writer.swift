@@ -1928,9 +1928,10 @@ private final class Session {
                 }
             }
             for (name, value) in project.customProperties where !present.contains(name) { updates[name] = value }
-            if !updates.isEmpty {
-                root.addStream("\u{5}DocumentSummaryInformation", OLEPropertySet.updatingUserProperties(dsi, updates))
-            }
+            // Called without updates too: it renumbers values an older
+            // MPPKit gave a link's id, and leaves the stream as it is otherwise.
+            let updated = OLEPropertySet.updatingUserProperties(dsi, updates)
+            if updated != dsi { root.addStream("\u{5}DocumentSummaryInformation", updated) }
         }
 
         // Props14 records where the template was saved and by whom. Only

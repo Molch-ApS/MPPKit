@@ -229,8 +229,14 @@ public enum OLEPropertySet {
     public static let userDefinedFormatID: [UInt8] = [0x05, 0xD5, 0xCD, 0xD5, 0x9C, 0x2E, 0x1B, 0x10,
                                                       0x93, 0x97, 0x08, 0x00, 0x2B, 0x2C, 0xF9, 0xAE]
 
+    /// A property linked to content ("Link to content" in File > Properties
+    /// > Custom) has a second property at its id plus this, naming its
+    /// source. Project fills in its value on every save.
+    public static let linkFlag: UInt32 = 0x0100_0000
+
     /// The user-defined properties, by name, in the order the file lists
     /// them. Their names come from the section's dictionary (property 0).
+    /// Properties linked to content are left out: their values are Project's.
     public static func userProperties(_ bytes: [UInt8]) -> [(name: String, value: Value)] {
         guard let sections = rawSections(bytes),
               let i = sections.firstIndex(where: { $0.formatID == userDefinedFormatID }) else { return [] }
@@ -239,7 +245,10 @@ public enum OLEPropertySet {
         let doc = parse(bytes)
         guard i < doc.sections.count else { return [] }
         return section.order.compactMap { pid in
-            guard pid > 1, let name = names.first(where: { $0.pid == pid })?.name,
+            // A name on an id with the link flag is a value MPPKit before
+            // 0.5.4 numbered there; Project names only the values.
+            guard pid > 1, pid & linkFlag != 0 || section.raw[pid | linkFlag] == nil,
+                  let name = names.first(where: { $0.pid == pid })?.name,
                   let value = doc.sections[i][pid] else { return nil }
             return (name, value)
         }
@@ -255,7 +264,7 @@ public enum OLEPropertySet {
     /// file property once they pass about 512 KB together, without a word.
     /// Callers keep well under both.
     public static func updatingUserProperties(_ bytes: [UInt8], _ updates: [String: String?]) -> [UInt8] {
-        guard var sections = rawSections(bytes), !updates.isEmpty else { return bytes }
+        guard var sections = rawSections(bytes) else { return bytes }
         let i: Int
         if let found = sections.firstIndex(where: { $0.formatID == userDefinedFormatID }) {
             i = found
@@ -268,13 +277,29 @@ public enum OLEPropertySet {
         }
         var names = dictionary(sections[i])
         let codePage = sections[i].codePage
+        // MPPKit before 0.5.4 numbered new values after the highest id, often
+        // a link's: Project took them for links and dropped them on save.
+        // They move to values' ids, their bytes unchanged.
+        var renumbered = false
+        for (n, entry) in names.enumerated() where entry.pid & linkFlag != 0 {
+            let pid = nextValueID(sections[i], names)
+            if let raw = sections[i].raw[entry.pid] {
+                sections[i].remove(entry.pid)
+                sections[i].set(pid, raw)
+            }
+            names[n].pid = pid
+            renumbered = true
+        }
+        guard renumbered || !updates.isEmpty else { return bytes }
         for (name, value) in updates.sorted(by: { $0.key < $1.key }) {
             // Names match regardless of case, as in Project; `lowercased()`
             // because the WebAssembly Foundation has no caseInsensitiveCompare.
             let key = name.lowercased()
             let existing = names.first { $0.name.lowercased() == key }?.pid
+            // A property linked to content stays Project's.
+            if let pid = existing, sections[i].raw[pid | linkFlag] != nil { continue }
             if let value {
-                let pid = existing ?? max(1, sections[i].order.max() ?? 1, names.map(\.pid).max() ?? 1) + 1
+                let pid = existing ?? nextValueID(sections[i], names)
                 if existing == nil { names.append((pid, name)) }
                 sections[i].set(pid, lpstr(value, codePage: codePage))
             } else if let pid = existing {
@@ -284,6 +309,15 @@ public enum OLEPropertySet {
         }
         sections[i].set(0, dictionaryBytes(names, codePage: codePage), first: true)
         return build(bytes, sections)
+    }
+
+    /// The next free id for a value: past every id in the section with the
+    /// link flag taken off. Never one with the flag, which Project reads as a
+    /// link's source, and never one a link is left for, which would make the
+    /// value linked.
+    private static func nextValueID(_ section: RawSection, _ names: [(pid: UInt32, name: String)]) -> UInt32 {
+        let ids = (section.order + names.map(\.pid)).map { $0 & ~linkFlag }
+        return max(1, ids.max() ?? 1) + 1
     }
 
     // MARK: - Raw sections
