@@ -149,6 +149,23 @@ final class CustomPropertiesTests: XCTestCase {
         XCTAssertEqual(OLEPropertySet.updatingUserProperties(moved, [:]), moved)
     }
 
+    /// Text a 1252 section can't hold makes it UTF-8; what it had is kept.
+    func testTextOutsideTheCodePageMakesTheSectionUTF8() throws {
+        let dsi = try templateDSI()
+        XCTAssertEqual(OLEPropertySet.parse(dsi)[1]?[1], .int(1252))
+        var bytes = OLEPropertySet.updatingUserProperties(dsi, ["Client": "Blåbærgrød, Straße, café"])
+        XCTAssertEqual(OLEPropertySet.parse(bytes)[1]?[1], .int(1252), "1252 holds these")
+        let world = ["Greek": "Ελληνικά", "Polish": "Łódź, Gdańsk", "Chinese": "日本語, 北京",
+                     "Emoji": "Done ✓ 🏗️", "Ærø zone": "Kælder"]
+        bytes = OLEPropertySet.updatingUserProperties(bytes, world.mapValues { $0 })
+        XCTAssertEqual(OLEPropertySet.parse(bytes)[1]?[1], .int(-535), "65001 as a VT_I2")
+        XCTAssertEqual(strings(bytes), world.merging(["Client": "Blåbærgrød, Straße, café"]) { a, _ in a })
+        // The linked properties' names and values come through.
+        let names = Set(OLEPropertySet.parse(bytes)[1]!.properties.keys)
+        XCTAssertTrue(names.isSuperset(of: [5, 5 | OLEPropertySet.linkFlag]))
+        XCTAssertEqual(OLEPropertySet.parse(bytes)[1]?.string(5 | OLEPropertySet.linkFlag), "Planlagt slutdato")
+    }
+
     /// Changes property `from` to `to` in the user-defined section: its
     /// entry in the id table and in the dictionary (code page 1252, so the
     /// dictionary's names aren't padded).
