@@ -394,6 +394,9 @@ private final class Session {
         for i in project.resources.indices where project.resources[i].guid.count != 16 {
             project.resources[i].guid = options.newGUID()
         }
+        // Costs as Project would have them: what the file holds where nothing
+        // they depend on changed, worked out afresh where it did.
+        project.recalculateCosts(keepingFrom: source)
         let byUID = Dictionary(uniqueKeysWithValues: project.tasks.map { ($0.uid, $0) })
         var children: [Int: [Int]] = [:]
         for t in project.tasks { children[t.parentUID, default: []].append(t.uid) }
@@ -521,6 +524,18 @@ private final class Session {
             e.i32(F.remainingDuration, Int32(tenths))
             e.f64(F.work, work)
             e.f64(F.remainingWork, work)
+            // Costs, in hundredths: the project summary row adds up the top.
+            let cost = task?.cost ?? project.totalCost.cost
+            let actualCost = task?.actualCost ?? project.totalCost.actual
+            e.f64(F.cost, cost * 100)
+            e.f64(F.actualCost, actualCost * 100)
+            e.f64(F.remainingCost, (cost - actualCost) * 100)
+            let fixed = task?.fixedCost ?? 0, accrual = task?.fixedCostAccrual ?? "prorated"
+            let fixedDone = Project.accrued(fixed, accrual, percent: percent)
+            e.f64(F.fixedCost, fixed * 100)
+            e.f64(F.actualFixedCost, fixedDone * 100)
+            e.f64(F.remainingFixedCost, (fixed - fixedDone) * 100)
+            e.u16(F.fixedCostAccrual, MPP.accrualCodes[accrual] ?? 3)
             let units = task?.durationUnits ?? "d"
             let estimated = task?.estimated ?? false
             let unitsWord = (isSummary ? MPP.summaryUnits : (MPP.unitLabels[units] ?? 7))
@@ -882,6 +897,21 @@ private final class Session {
             e.u32(RF.uniqueID, UInt32(res.uid))
             e.u32(RF.id, UInt32(n + 1))
             e.f64(RF.maxUnits, res.maxUnits * W.pctScale)
+            let mine = project.assignments.filter { $0.resourceUID == res.uid }
+            let rCost = mine.reduce(0) { $0 + $1.cost }, rActual = mine.reduce(0) { $0 + $1.actualCost }
+            e.f64(RF.cost, rCost * 100)
+            e.f64(RF.actualCost, rActual * 100)
+            e.f64(RF.remainingCost, (rCost - rActual) * 100)
+            // The rate fields mirror table A when it has one rate; with more,
+            // Project's own values stay.
+            if let table = res.costRateTables.first, table.count == 1 || ownRsc[res.uid] == nil, let rate = table.first {
+                e.f64(RF.standardRate, rate.standardPerHour)
+                e.f64(RF.overtimeRate, rate.overtimePerHour)
+                e.f64(RF.costPerUse, rate.costPerUse * 100)
+            } else if ownRsc[res.uid] == nil {
+                for f in [RF.standardRate, RF.overtimeRate, RF.costPerUse] { e.f64(f, 0) }
+            }
+            e.u16(RF.accrueAt, MPP.accrualCodes[res.accrueAt] ?? 3)
             if let calUID { e.i32(RF.calendarUID, Int32(calUID)) }
             e.f64(RF.position, Double(n + 2))
             e.put(RF.guid, res.guid)
@@ -1326,10 +1356,12 @@ private final class Session {
         let assigned = Set(project.assignments.map(\.taskUID))
         // Project keeps an assignment row for every leaf task, with a
         // placeholder resource where nobody is assigned.
-        var specs: [(task: Int, resource: Int32, units: Double, baselines: [Int: Baseline]?)] =
-            project.assignments.map { ($0.taskUID, Int32($0.resourceUID), $0.units, $0.baselines) }
+        var specs: [(task: Int, resource: Int32, units: Double, baselines: [Int: Baseline]?,
+                     cost: Double, actualCost: Double, table: Int)] =
+            project.assignments.map { ($0.taskUID, Int32($0.resourceUID), $0.units, $0.baselines,
+                                       $0.cost, $0.actualCost, $0.costRateTable) }
         specs += project.tasks.filter { !assigned.contains($0.uid) && (children[$0.uid] ?? []).isEmpty }
-            .map { ($0.uid, W.nullResourceUID, 1.0, nil) }
+            .map { ($0.uid, W.nullResourceUID, 1.0, nil, 0, 0, 0) }
 
         var rows: [Row] = []
         var vars: [(uid: Int, field: UInt32, payload: [UInt8])] = []
@@ -1369,6 +1401,10 @@ private final class Session {
             e.f64(A.units, spec.units * W.pctScale)
             let work = Double(tenths) * W.workScale * spec.units
             for f in [A.work, A.regularWork, A.remainingWork] { e.f64(f, work) }
+            e.f64(A.cost, spec.cost * 100)
+            e.f64(A.actualCost, spec.actualCost * 100)
+            e.f64(A.remainingCost, (spec.cost - spec.actualCost) * 100)
+            e.u16(A.costRateTable, UInt16(spec.table))
             e.f64(A.actualWork, 0)
             e.u16(A.percentWorkComplete, 0)
             e.ts(A.actualStart, nil)

@@ -214,6 +214,22 @@ public enum RelationType: String, CaseIterable, Sendable {
     case startToStart = "SS"
 }
 
+/// One rate of a resource's cost rate table, in force until `until` (the
+/// last has none): standard and overtime pay per hour of work, and a cost
+/// for each use.
+public struct PayRate: Equatable, Sendable {
+    public var standardPerHour: Double
+    public var overtimePerHour: Double = 0
+    public var costPerUse: Double = 0
+    public var until: Date?
+    public init(standardPerHour: Double, overtimePerHour: Double = 0, costPerUse: Double = 0, until: Date? = nil) {
+        self.standardPerHour = standardPerHour
+        self.overtimePerHour = overtimePerHour
+        self.costPerUse = costPerUse
+        self.until = until
+    }
+}
+
 /// A gap in a split task: no work for `idleMinutes` of working time once
 /// `workMinutes` of the task's own working time are done.
 public struct TaskSplit: Equatable, Sendable {
@@ -289,6 +305,14 @@ public struct ProjectTask: Identifiable, Equatable, Sendable {
     /// drops a gap the task no longer reaches; the writer lays the work out
     /// around them.
     public var splits: [TaskSplit] = []
+    /// A cost on the task itself, apart from its resources' work, and when
+    /// it falls due: `start`, `end` or `prorated` (as work is done).
+    public var fixedCost: Double = 0
+    public var fixedCostAccrual: String = "prorated"
+    /// The costs Project calculated (read from the file), or MPPKit's
+    /// (`Project.recalculateCosts`).
+    public var cost: Double = 0
+    public var actualCost: Double = 0
     public var created: Date?
     /// Text1...Text30, keyed by field number.
     public var text: [Int: String] = [:]
@@ -434,7 +458,8 @@ public struct Resource: Identifiable, Equatable, Sendable {
     public var email: String = ""
     /// 1.0 means 100%.
     public var maxUnits: Double = 1.0
-    /// `work`, `material` or `cost`. Only `work` is written.
+    /// `work` or `material` (read from the file; a cost resource reads as
+    /// `work` without rates). Only `work` is written.
     public var type: String = "work"
     /// Custom WBS-style code for the resource.
     public var code: String = ""
@@ -442,6 +467,11 @@ public struct Resource: Identifiable, Equatable, Sendable {
     public var group: String = ""
     /// The resource's own calendar uid, as read from the file.
     public var calendarUID: Int?
+    /// Cost rate tables A to E, each its pay rates in date order. Empty when
+    /// the file has none.
+    public var costRateTables: [[PayRate]] = []
+    /// When a work resource's cost falls due: `start`, `end` or `prorated`.
+    public var accrueAt: String = "prorated"
     public var guid: [UInt8] = []
     /// Text1...Text30, keyed by field number.
     public var text: [Int: String] = [:]
@@ -472,6 +502,11 @@ public struct Assignment: Equatable, Sendable {
     public var workHours: Double = 0
     public var start: Date?
     public var finish: Date?
+    /// Which of the resource's cost rate tables applies: 0 for A to 4 for E.
+    public var costRateTable: Int = 0
+    /// As Project calculated them (read from the file), or MPPKit's.
+    public var cost: Double = 0
+    public var actualCost: Double = 0
     public var baselines: [Int: Baseline] = [:]
 
     public init(taskUID: Int, resourceUID: Int, units: Double = 1.0) {
@@ -571,6 +606,7 @@ public struct Project: Sendable, Equatable {
 // here because Swift synthesises the conformance only in the declaring file.
 extension ProjectTask: Codable {}
 extension TaskSplit: Codable {}
+extension PayRate: Codable {}
 extension Relation: Codable {}
 extension Assignment: Codable {}
 extension Baseline: Codable {}
