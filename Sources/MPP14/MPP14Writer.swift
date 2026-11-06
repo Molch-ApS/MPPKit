@@ -1737,8 +1737,9 @@ private final class Session {
         let defs = project.outlineCodeDefinitions.filter { (1...10).contains($0.key) && $0.value.listGUID.count == 16 }
         guard !defs.isEmpty, var table = OutlineCodeTable(root: root) else { return [:] }
         let was = source?.outlineCodeDefinitions ?? [:]
-        var rows = Dictionary(table.values.map { ($0.guid, $0.row) }, uniquingKeysWith: { a, _ in a })
-        let changed = defs.filter { was[$0.key] != $0.value }.sorted { $0.key < $1.key }
+        var rows = Dictionary(table.values.map { ($0.guid, $0.uid) }, uniquingKeysWith: { a, _ in a })
+        let changed = defs.filter { was[$0.key] != $0.value || table.clashes(list: $0.value.listGUID) }
+            .sorted { $0.key < $1.key }
         guard !changed.isEmpty else { return rows }
         let lists = Set(changed.map(\.value.listGUID) + changed.compactMap { was[$0.key]?.listGUID })
         rows.merge(table.replace(lists: lists, with: changed.map(\.value))) { _, new in new }
