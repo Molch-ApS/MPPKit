@@ -311,15 +311,23 @@ public enum Scheduler {
                     let done = Int((Double(minutes) * Double(task.percentComplete) / 100).rounded())
                     stopDate[uid] = after(s, done, task, wt)
                 }
+                // Project writes an automatic task's late finish at the end of
+                // the working time before it (Friday 17:00, not Monday 08:00).
+                // A manual task and a milestone keep the moment as it is.
+                if !task.manual, !isMilestone, !task.isElapsed, let p = wt.previousWorkingMoment(lf),
+                   p < lf, wt.minutes(from: p, to: lf) == 0 { lf = p }
                 task.lateStart = ls
                 task.lateFinish = lf
                 project.tasks[index[uid]!] = task
             }
-            // Summaries span their children's late dates.
+            // Summaries span their leaves' late dates. A manual leaf not yet
+            // started counts with its own dates, as in Project: a summary over
+            // such work has the late dates of its own bar.
             for uid in order.reversed() where children[uid] != nil {
                 let kids = leaves(under: uid).map { project.tasks[index[$0]!] }
-                project.tasks[index[uid]!].lateStart = kids.compactMap(\.lateStart).min()
-                project.tasks[index[uid]!].lateFinish = kids.compactMap(\.lateFinish).max()
+                func asIs(_ t: ProjectTask) -> Bool { t.manual && t.actualStart == nil && t.percentComplete == 0 }
+                project.tasks[index[uid]!].lateStart = kids.compactMap { asIs($0) ? $0.start : $0.lateStart }.min()
+                project.tasks[index[uid]!].lateFinish = kids.compactMap { asIs($0) ? $0.finish : $0.lateFinish }.max()
             }
         }
 

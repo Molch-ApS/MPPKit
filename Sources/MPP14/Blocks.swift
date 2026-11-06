@@ -602,7 +602,7 @@ public enum MPP {
         for candidate in candidateItemSizes(body: body, declaredCount: declaredCount,
                                             preferred: defaultItemSize) {
             if let parsed = try? parseFixedMeta(data, itemSize: candidate),
-               offsetsAreMonotonic(parsed.items) {
+               offsetsAreMonotonic(declaredItems(parsed)) {
                 return parsed
             }
         }
@@ -625,14 +625,20 @@ public enum MPP {
             let n = body / size
             if n >= lower, n <= upper { candidates.append(size) }
         }
-        if candidates.isEmpty {
-            candidates = [preferred, preferred + 1, preferred - 1].filter { $0 > 0 }
+        if !candidates.isEmpty {
+            return candidates.sorted {
+                let da = abs(body / $0 - declaredCount), db = abs(body / $1 - declaredCount)
+                if da != db { return da < db }
+                return abs($0 - preferred) < abs($1 - preferred)
+            }
         }
-        return candidates.sorted {
-            let da = abs(body / $0 - declaredCount), db = abs(body / $1 - declaredCount)
-            if da != db { return da < db }
-            return abs($0 - preferred) < abs($1 - preferred)
-        }
+        // A plan whose tasks were deleted can keep far more room than that (424
+        // tasks in 454 items of 96 bytes): sizes that leave room for every
+        // declared item, nearest the preferred size first.
+        let roomy = (8...max(8, body)).filter { body % $0 == 0 && body / $0 >= declaredCount }
+            .filter { abs($0 - preferred) <= max(8, preferred / 8) }
+            .sorted { abs($0 - preferred) < abs($1 - preferred) }
+        return roomy + [preferred, preferred + 1, preferred - 1].filter { $0 > 0 && !roomy.contains($0) }
     }
 
     /// Under the correct item size every item's FixedData offset at +4 is a
