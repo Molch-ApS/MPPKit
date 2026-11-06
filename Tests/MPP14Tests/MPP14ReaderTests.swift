@@ -165,6 +165,26 @@ final class MPP14ReaderTests: XCTestCase {
         XCTAssertLessThanOrEqual(project.relations.count, Int(meta.declaredCount))
     }
 
+    /// A plan whose tasks were deleted keeps much more room than the declared
+    /// count: 424 tasks in 454 items of 96 bytes, the items past the count
+    /// holding stale offsets. The size must still come out as 96, or every
+    /// task's second bitmap (Manually Scheduled among it) is read shifted.
+    func testFixedMetaWithManySpareItemsKeepsItsItemSize() throws {
+        var data = BinaryWriter()
+        data.append([0xBA, 0xAD, 0xDF, 0xFA, 4, 0, 0, 0])
+        data.u32(424)
+        data.u32(424 * 64)
+        for i in 0..<454 {
+            var item = [UInt8](repeating: 0, count: 96)
+            let offset = UInt32(i < 424 ? i * 64 : (i - 424) * 64)
+            withUnsafeBytes(of: offset.littleEndian) { item.replaceSubrange(4..<8, with: $0) }
+            data.append(item)
+        }
+        let meta = try MPP.parseFixedMetaAuto(data.bytes, defaultItemSize: MPP.taskMeta2Size)
+        XCTAssertEqual(meta.items.first?.count, 96)
+        XCTAssertEqual(MPP.declaredItems(meta).count, 424)
+    }
+
     // MARK: - Primitives
 
     /// A timestamp is tenths-of-a-minute plus a day count, so a round trip must

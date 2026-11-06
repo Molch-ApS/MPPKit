@@ -148,6 +148,40 @@ final class SchedulingTests: XCTestCase {
         XCTAssertFalse(p.isCritical(uid: 1))
     }
 
+    /// As in Project: a summary's late dates take a manual task's own dates,
+    /// and an automatic task's late dates (checked in Project, #27).
+    func testSummaryLateDatesTakeManualTasksAsTheyAre() {
+        func manual(_ uid: Int, _ s: Date, _ f: Date, parent: Int) -> ProjectTask {
+            task(uid, 0) { $0.manual = true; $0.start = s; $0.finish = f; $0.parentUID = parent; $0.outlineLevel = 2 }
+        }
+        var p = plan([task(1, 0) { $0.outlineLevel = 1 },
+                      manual(2, d(2026, 1, 12, 8), d(2026, 1, 14, 17), parent: 1),
+                      manual(3, d(2026, 1, 19, 8), d(2026, 1, 20, 17), parent: 1),
+                      task(4, 0) { $0.outlineLevel = 1 },
+                      manual(5, d(2026, 1, 7, 8), d(2026, 1, 8, 17), parent: 4),
+                      task(6, 4) { $0.parentUID = 4; $0.outlineLevel = 2 },
+                      task(7, 40) { $0.outlineLevel = 1 }])
+        try! Scheduler.schedule(&p)
+        // Only manual work: the summary's own bar.
+        XCTAssertEqual(p.task(uid: 1)?.lateStart, d(2026, 1, 12, 8))
+        XCTAssertEqual(p.task(uid: 1)?.lateFinish, d(2026, 1, 20, 17))
+        // Mixed: the manual task's start, the automatic task's late finish.
+        XCTAssertEqual(p.task(uid: 4)?.lateStart, d(2026, 1, 7, 8))
+        XCTAssertEqual(p.task(uid: 4)?.lateFinish, p.task(uid: 7)?.finish)
+    }
+
+    /// Project writes an automatic task's late finish at the end of the day
+    /// before its successor's late start, Friday 17:00 rather than Monday
+    /// 08:00. A manual task keeps the successor's start as it is.
+    func testLateFinishIsTheEndOfTheWorkingDayBefore() {
+        var p = plan([task(1, 2), task(2, 5) { $0.constraint = "MSO"; $0.constraintDate = self.d(2026, 1, 12, 8) },
+                      task(3, 1) { $0.manual = true; $0.start = self.d(2026, 1, 5, 8); $0.finish = self.d(2026, 1, 5, 17) }],
+                     [Relation(predUID: 1, succUID: 2), Relation(predUID: 3, succUID: 2)])
+        try! Scheduler.schedule(&p)
+        XCTAssertEqual(p.task(uid: 1)?.lateFinish, d(2026, 1, 9, 17))
+        XCTAssertEqual(p.task(uid: 3)?.lateFinish, d(2026, 1, 12, 8))
+    }
+
     // MARK: Units
 
     func testElapsedDurationRunsRoundTheClock() {

@@ -602,7 +602,7 @@ public enum MPP {
         for candidate in candidateItemSizes(body: body, declaredCount: declaredCount,
                                             preferred: defaultItemSize) {
             if let parsed = try? parseFixedMeta(data, itemSize: candidate),
-               offsetsAreMonotonic(parsed.items) {
+               offsetsAreMonotonic(declaredItems(parsed)) {
                 return parsed
             }
         }
@@ -625,14 +625,26 @@ public enum MPP {
             let n = body / size
             if n >= lower, n <= upper { candidates.append(size) }
         }
-        if candidates.isEmpty {
-            candidates = [preferred, preferred + 1, preferred - 1].filter { $0 > 0 }
+        if !candidates.isEmpty {
+            return candidates.sorted {
+                let da = abs(body / $0 - declaredCount), db = abs(body / $1 - declaredCount)
+                if da != db { return da < db }
+                return abs($0 - preferred) < abs($1 - preferred)
+            }
         }
-        return candidates.sorted {
-            let da = abs(body / $0 - declaredCount), db = abs(body / $1 - declaredCount)
-            if da != db { return da < db }
-            return abs($0 - preferred) < abs($1 - preferred)
+        // A plan whose tasks were deleted can keep far more room than that (424
+        // tasks in 454 items of 96 bytes): sizes that leave room for every
+        // declared item, nearest the preferred size first.
+        let reach = max(8, preferred / 8)
+        var roomy: [Int] = []
+        for size in 8...max(8, body) where body % size == 0 && body / size >= declaredCount {
+            if abs(size - preferred) <= reach { roomy.append(size) }
         }
+        roomy.sort { abs($0 - preferred) < abs($1 - preferred) }
+        for size in [preferred, preferred + 1, preferred - 1] where size > 0 && !roomy.contains(size) {
+            roomy.append(size)
+        }
+        return roomy
     }
 
     /// Under the correct item size every item's FixedData offset at +4 is a

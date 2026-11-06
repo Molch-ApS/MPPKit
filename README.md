@@ -193,11 +193,15 @@ every task's dates, late dates and the critical path with what Project stored
 (`SCHEDCHECK_LIST=n` lists differences, `SCHEDCHECK_ROW=<id>` traces one task
 and its successors). `SchedulingTests.testScheduleMatchesProjectOnSavedFiles`
 asserts the same over `Fixtures/` and any files listed in
-`MPPKIT_REFERENCE_LIST`. On 24 real plans saved by Project, dates match on 20
-and the critical path on most; the remaining differences are plans rescheduled
-against a status date, a file with tasks past the project finish, and the late
-dates of some summary rows. Only use files Project saved last: a file saved by
-MPP Studio carries MPPKit's own late dates.
+`MPPKIT_REFERENCE_LIST`. On 47 real plans, compared with the dates Project
+shows once it has opened them, start and finish match on every task in 38 and
+every date, late dates included, in 20; most of the rest differ in a few late
+dates. Two files from Project 2010 have no Task Mode field in their field map:
+Project shows their tasks as manually scheduled, MPPKit reads them as
+automatic. The late dates a file stores can be out of date (Project works them
+out again on open), so compare with what Project shows when in doubt. Only use
+files Project saved last: a file saved by MPP Studio carries MPPKit's own late
+dates.
 
 `mppdump schedbench <file.mpp | synthN>` times the scheduler: about 9 ms for
 2 000 tasks and 46 ms for 10 000 (release build).
