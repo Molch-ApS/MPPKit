@@ -214,6 +214,17 @@ public enum RelationType: String, CaseIterable, Sendable {
     case startToStart = "SS"
 }
 
+/// A gap in a split task: no work for `idleMinutes` of working time once
+/// `workMinutes` of the task's own working time are done.
+public struct TaskSplit: Equatable, Sendable {
+    public var workMinutes: Int
+    public var idleMinutes: Int
+    public init(workMinutes: Int, idleMinutes: Int) {
+        self.workMinutes = workMinutes
+        self.idleMinutes = idleMinutes
+    }
+}
+
 public struct ProjectTask: Identifiable, Equatable, Sendable {
     public var uid: Int
     /// Project's `ID` column: the row number, assigned in outline order.
@@ -271,8 +282,13 @@ public struct ProjectTask: Identifiable, Equatable, Sendable {
     /// Working minutes inside the task where no work happens: a task split in
     /// Project spans longer than its duration. Taken from the saved dates when
     /// the file is read, and kept by the scheduler so the task's span stays
-    /// what Project showed. (Where in the span the gaps fall is not modelled.)
+    /// what Project showed. With `splits` known, it is their idle time.
     public var splitMinutes: Int = 0
+    /// Where a split task's gaps fall, when the file says: each after so much
+    /// of the task's working time. The scheduler moves them with the task and
+    /// drops a gap the task no longer reaches; the writer lays the work out
+    /// around them.
+    public var splits: [TaskSplit] = []
     public var created: Date?
     /// Text1...Text30, keyed by field number.
     public var text: [Int: String] = [:]
@@ -554,6 +570,7 @@ public struct Project: Sendable, Equatable {
 // Codable, for copying tasks between documents (`TaskFragment`). Declared
 // here because Swift synthesises the conformance only in the declaring file.
 extension ProjectTask: Codable {}
+extension TaskSplit: Codable {}
 extension Relation: Codable {}
 extension Assignment: Codable {}
 extension Baseline: Codable {}
