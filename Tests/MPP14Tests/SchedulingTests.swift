@@ -38,6 +38,34 @@ final class SchedulingTests: XCTestCase {
         return t
     }
 
+    // MARK: Lags and task calendars
+
+    /// A lag runs in the successor's calendar, forward and back, as measured
+    /// in Microsoft Project: 2 days (16 hours) after Monday 17:00 is Tuesday
+    /// 09:00 for a successor on a 24-hour calendar, and the predecessor
+    /// keeps no float.
+    func testLagRunsInTheSuccessorsCalendar() throws {
+        var allDay = ProjectCalendar(name: "24 Hours")
+        for day in 1...7 { allDay.week[day] = [0...1440] }
+
+        var p = plan([task(1, 1), task(2, 1) { $0.calendar = "24 Hours" }],
+                     [Relation(predUID: 1, succUID: 2, lagDays: 2)])
+        p.calendars = [allDay]
+        try Scheduler.schedule(&p)
+        XCTAssertEqual(p.task(uid: 2)?.start, d(2026, 1, 6, 9))
+        XCTAssertEqual(p.task(uid: 1)?.lateFinish, p.task(uid: 1)?.finish)
+
+        // The other way round: the lag runs in the successor's Standard
+        // calendar, from Monday 16:00 to Wednesday 16:00.
+        var q = plan([task(1, 1) { $0.calendar = "24 Hours" }, task(2, 1)],
+                     [Relation(predUID: 1, succUID: 2, lagDays: 2)])
+        q.calendars = [allDay]
+        try Scheduler.schedule(&q)
+        XCTAssertEqual(q.task(uid: 1)?.finish, d(2026, 1, 5, 16))
+        XCTAssertEqual(q.task(uid: 2)?.start, d(2026, 1, 7, 16))
+        XCTAssertEqual(q.task(uid: 1)?.lateFinish, q.task(uid: 1)?.finish)
+    }
+
     // MARK: Against Project's saved results
 
     /// Every Project-saved file in `Fixtures/`, and any listed one per line in
