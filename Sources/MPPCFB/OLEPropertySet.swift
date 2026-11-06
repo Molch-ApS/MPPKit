@@ -276,7 +276,15 @@ public enum OLEPropertySet {
             i = sections.count - 1
         }
         var names = dictionary(sections[i])
-        let codePage = sections[i].codePage
+        var codePage = sections[i].codePage
+        // Text the section's code page can't hold (Greek, Polish, Chinese in
+        // a 1252 section) would turn to "?": the section becomes UTF-8, as
+        // Project writes new files, its other text kept.
+        let texts = updates.keys.map { $0 } + updates.values.compactMap { $0 }
+        if !texts.allSatisfy({ fits($0, codePage: codePage) }) {
+            toUTF8(&sections[i])
+            codePage = 65001
+        }
         // MPPKit before 0.5.4 numbered new values after the highest id, often
         // a link's: Project took them for links and dropped them on save.
         // They move to values' ids, their bytes unchanged.
@@ -468,6 +476,28 @@ public enum OLEPropertySet {
         }
         w.pad(toMultipleOf: 4)
         return w.bytes
+    }
+
+    /// Whether `s` is written in `codePage` without loss.
+    private static func fits(_ s: String, codePage: UInt32) -> Bool {
+        if codePage == 65001 || codePage == 1200 { return true }
+        guard let encoding = stringEncoding(codePage: codePage) else { return true }
+        return s.data(using: encoding, allowLossyConversion: false) != nil
+    }
+
+    /// The section in UTF-8 (code page 65001): its code page, every `VT_LPSTR`
+    /// value decoded in the old code page and written again. The dictionary is
+    /// written by the caller, in the new code page.
+    private static func toUTF8(_ section: inout RawSection) {
+        let old = section.codePage
+        for pid in section.order where pid > 1 {
+            guard let raw = section.raw[pid], let type = BinaryReader(raw).u32(at: 0), type == VT.lpstr,
+                  let length = BinaryReader(raw).u32(at: 4).map(Int.init), 8 + length <= raw.count else { continue }
+            var text = Array(raw[8..<8 + length])
+            while text.last == 0 { text.removeLast() }
+            section.raw[pid] = lpstr(decodeString(text, codePage: old), codePage: 65001)
+        }
+        section.set(1, [0x02, 0, 0, 0, 0xE9, 0xFD, 0, 0])      // VT_I2 65001
     }
 
     private static func encodeString(_ s: String, codePage: UInt32) -> [UInt8] {
