@@ -226,6 +226,13 @@ private func isDeletedStub(_ rec: [UInt8]) -> Bool {
     rec.count == 16 && rec[2] == 0xFF && rec[3] == 0xFF && rec[4...].allSatisfy { $0 == 0 }
 }
 
+/// A task deleted in Project can keep its full record, marked by bit 0x02 of
+/// its meta flags (as MPP14Reader reads it). It is never a prototype: a task
+/// cloned from it carried the mark, and Project and MPPKit both skipped it.
+private func isDeletedRecord(_ row: Row) -> Bool {
+    (BinaryReader(row.meta).u32(at: 0) ?? 0) & 0x02 != 0
+}
+
 private func assemble(_ rows: [Row], second: Bool) -> (data: [UInt8], metas: [[UInt8]]) {
     var data: [UInt8] = []
     var metas: [[UInt8]] = []
@@ -1133,7 +1140,7 @@ private final class Session {
         let F = MPP.TaskField.self
         struct Candidate { var index: Int; var uid: Int; var row: Row }
         var full: [Candidate] = []
-        for (i, row) in t.rows.enumerated() where row.rec.count > 100 {
+        for (i, row) in t.rows.enumerated() where row.rec.count > 100 && !isDeletedRecord(row) {
             guard let it = taskMap.fm[F.uniqueID], let uid = BinaryReader(row.rec).u32(at: it.offset) else { continue }
             full.append(Candidate(index: i, uid: Int(uid), row: row))
         }
@@ -1218,7 +1225,7 @@ private final class Session {
         func guid(_ row: Row) -> [UInt8]? { Self.bytes(row, taskMap.fm[F.guid], count: 16) }
         var records: [Int: Prototype] = [:], summaries = Set<Int>(), all: [Int: [UInt32: [UInt8]]] = [:]
         var summaryRow: Row?
-        for row in t.rows where row.rec.count > 100 {
+        for row in t.rows where row.rec.count > 100 && !isDeletedRecord(row) {
             guard let raw = BinaryReader(row.rec).u32(at: uidItem.offset) else { continue }
             let uid = Int(raw)
             if uid == 0 { summaryRow = row; continue }
