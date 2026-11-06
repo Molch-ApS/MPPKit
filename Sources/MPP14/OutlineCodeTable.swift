@@ -55,8 +55,12 @@ struct OutlineCodeTable {
         var item: [UInt8], data: [UInt8], item2: [UInt8], data2: [UInt8]
     }
 
+    /// A value: `row` is its place in the table; `uid` names it. Its name
+    /// and other var fields, its parent and a task's value all refer to the
+    /// uid. Project numbers both from 1 per file; MPPKit before 0.5.4 wrote
+    /// both as the next row, which can repeat a uid already in the table.
     struct Value {
-        var row: Int, level: Int, parent: Int
+        var row: Int, uid: Int, level: Int, parent: Int
         var guid: [UInt8], list: [UInt8]
         var name: String, sort: Double, description: String
     }
@@ -97,6 +101,8 @@ struct OutlineCodeTable {
 
     func row(_ r: Record) -> Int { Int(BinaryReader(r.data).u32(at: 0) ?? 0) }
 
+    func uid(_ r: Record) -> Int { Int(BinaryReader(r.data).u32(at: 4) ?? 0) }
+
     func list(_ r: Record) -> [UInt8] { listAt18 ? Array(r.data2[18..<34]) : Array(r.data2[16..<32]) }
 
     /// Every value of every table.
@@ -105,9 +111,9 @@ struct OutlineCodeTable {
         for v in vars { byRow[v.uid, default: [:]][v.field] = v.payload }
         return records.filter(isValue).map { r in
             let b = BinaryReader(r.data)
-            let row = row(r), v = byRow[row] ?? [:]
+            let uid = uid(r), v = byRow[uid] ?? [:]
             let level = listAt18 ? b.u16(at: 8) : b.u16(at: 12), parent = listAt18 ? b.u32(at: 10) : b.u32(at: 8)
-            return Value(row: row, level: Int(level ?? 1), parent: Int(parent ?? 0),
+            return Value(row: row(r), uid: uid, level: Int(level ?? 1), parent: Int(parent ?? 0),
                          guid: Array(r.data2[0..<16]), list: list(r),
                          name: v[Var.name].map(MPP.decodeUnicode) ?? "",
                          sort: v[Var.sort].flatMap { BinaryReader($0).f64(at: 0) } ?? 0,
@@ -115,10 +121,19 @@ struct OutlineCodeTable {
         }
     }
 
+    /// Whether a value of `list` has a uid a value of another list has too,
+    /// as an older MPPKit wrote them: the list is written again, renumbered.
+    func clashes(list: [UInt8]) -> Bool {
+        let values = records.filter(isValue)
+        let others = Set(values.filter { self.list($0) != list }.map(uid))
+        return values.contains { self.list($0) == list && others.contains(uid($0)) }
+    }
+
     /// The definition read back from the values of `list`, in table order.
     func definition(list: [UInt8]) -> OutlineCodeDefinition {
         let mine = values.filter { $0.list == list }.sorted { ($0.sort, $0.row) < ($1.sort, $1.row) }
-        let guidOf = Dictionary(mine.map { ($0.row, $0.guid) }, uniquingKeysWith: { a, _ in a })
+        // A parent is the uid of a value in the same list.
+        let guidOf = Dictionary(mine.map { ($0.uid, $0.guid) }, uniquingKeysWith: { a, _ in a })
         return OutlineCodeDefinition(listGUID: list, values: mine.map {
             OutlineCodeValue(guid: $0.guid, name: $0.name, description: $0.description,
                              parent: $0.parent == 0 ? nil : guidOf[$0.parent])
@@ -126,41 +141,65 @@ struct OutlineCodeTable {
     }
 
     /// Replace the values of these lists with the definitions' own, keeping
-    /// every other row. A value keeps its row while its GUID is in the table;
-    /// new ones get rows after the highest. Returns each value's row.
+    /// every other row. A value keeps its row and uid while its GUID is in
+    /// the table and its uid is its own; new ones get rows and uids after
+    /// the highest. Returns each value's uid, which a task's value names.
     mutating func replace(lists: Set<[UInt8]>, with definitions: [OutlineCodeDefinition]) -> [[UInt8]: Int] {
-        let old = Dictionary(records.filter(isValue).map { (Array($0.data2[0..<16]), row($0)) },
+        let values = records.filter(isValue)
+        let replaced = values.filter { lists.contains(list($0)) }
+        let kept = values.filter { !lists.contains(list($0)) }
+        let old = Dictionary(replaced.map { (Array($0.data2[0..<16]), (row: row($0), uid: uid($0))) },
                              uniquingKeysWith: { a, _ in a })
-        let dropped = Set(records.filter { isValue($0) && lists.contains(list($0)) }.map(row))
-        let doomed = Set(records.indices.filter { isValue(records[$0]) && lists.contains(list(records[$0])) })
-        records = records.indices.filter { !doomed.contains($0) }.map { records[$0] }
-        vars.removeAll { dropped.contains($0.uid) }
+        // Uids the other lists hold. An older MPPKit could give a value one
+        // of these, and Project then renumbers one of the two and loses
+        // every child's parent; such a value takes a new uid.
+        let taken = Set(kept.map(uid))
+        // Vars of the replaced values go. Where another list holds the uid
+        // too, only the last of each field goes: the older MPPKit's, which it
+        // wrote after the file's own.
+        let dropped = Set(replaced.map(uid))
+        let shared = dropped.intersection(taken)
+        var seen = Set<String>()
+        var keptVars: [(uid: Int, field: UInt32, payload: [UInt8])] = []
+        for v in vars.reversed() {
+            guard dropped.contains(v.uid) else { keptVars.append(v); continue }
+            if shared.contains(v.uid), !seen.insert("\(v.uid)/\(v.field)").inserted { keptVars.append(v) }
+        }
+        vars = Array(keptVars.reversed())
+        let gone = Set(records.indices.filter { isValue(records[$0]) && lists.contains(list(records[$0])) })
+        records = records.indices.filter { !gone.contains($0) }.map { records[$0] }
         // Only value rows count: the header records hold 0xFFFF000n there.
-        var next = max(records.filter(isValue).map(row).max() ?? 0, old.values.max() ?? 0) + 1
-        var rows: [[UInt8]: Int] = [:]
+        var nextRow = (values.map(row).max() ?? 0) + 1
+        var nextUID = max(values.map(uid).max() ?? 0, vars.map(\.uid).max() ?? 0) + 1
+        var ids: [[UInt8]: (row: Int, uid: Int)] = [:]
         for def in definitions {
             for v in def.values {
-                if let r = old[v.guid], dropped.contains(r) { rows[v.guid] = r } else { rows[v.guid] = next; next += 1 }
+                if let o = old[v.guid], !taken.contains(o.uid), !ids.values.contains(where: { $0.uid == o.uid }) {
+                    ids[v.guid] = o
+                } else {
+                    ids[v.guid] = (nextRow, nextUID)
+                    nextRow += 1; nextUID += 1
+                }
             }
         }
         for def in definitions {
             let parents = Set(def.values.compactMap(\.parent))
             for (i, v) in def.values.enumerated() {
-                let row = rows[v.guid]!
-                let parent = v.parent.flatMap { rows[$0] } ?? 0
+                let id = ids[v.guid]!
+                let parent = v.parent.flatMap { ids[$0]?.uid } ?? 0
                 let level = le16(UInt16(def.level(of: v.guid)))
-                let data = le(UInt32(row)) + le(UInt32(row))
+                let data = le(UInt32(id.row)) + le(UInt32(id.uid))
                     + (listAt18 ? level + le(UInt32(parent)) : le(UInt32(parent)) + level)
                 let item = le(0x20000) + le(0) + le16(parents.contains(v.guid) ? 0x1DB : 0x1D3)
                 let data2 = listAt18 ? v.guid + [0x15, 0] + def.listGUID : v.guid + def.listGUID + [0x15, 0]
                 let item2 = le(0) + le(0) + le16(0x1F)
                 records.append(Record(item: item, data: data, item2: item2, data2: data2))
-                vars.append((row, Var.name, MPP.encodeUnicode(v.name)))
-                vars.append((row, Var.sort, withUnsafeBytes(of: Double(i + 1).bitPattern.littleEndian) { Array($0) }))
-                if !v.description.isEmpty { vars.append((row, Var.description, MPP.encodeUnicode(v.description))) }
+                vars.append((id.uid, Var.name, MPP.encodeUnicode(v.name)))
+                vars.append((id.uid, Var.sort, withUnsafeBytes(of: Double(i + 1).bitPattern.littleEndian) { Array($0) }))
+                if !v.description.isEmpty { vars.append((id.uid, Var.description, MPP.encodeUnicode(v.description))) }
             }
         }
-        return rows
+        return ids.mapValues(\.uid)
     }
 
     /// The six streams, offsets and counts recomputed.
