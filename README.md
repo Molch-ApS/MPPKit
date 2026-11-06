@@ -162,10 +162,17 @@ fields, for tools and Project versions that do not read `.mpp`. Files from
 Project 2007 and earlier are recognised and refused with a clear message
 (`MPPError.olderFormat`).
 
+Costs are read (standard and overtime rates, cost per use, cost rate tables A
+to E with their dates, fixed cost and its accrual, and the costs Project
+calculated) and worked out again on save where something they depend on
+changed, as Project does: work × the standard rate in force each day, plus
+cost per use, plus fixed cost, summaries adding up. Overtime work and contours
+are not modelled; costs that depend on them stay as Project saved them until
+the work changes.
+
 Not yet modelled (kept on save, but not read into `Project` or recalculated):
-cost and rates, material and cost resources, outline codes, hyperlinks,
-recurring tasks, and timephased assignment contours beyond flat. Costs Project
-calculated are not recalculated after an edit. Split tasks are read with
+material and cost resources, outline codes, hyperlinks, recurring tasks, and
+timephased assignment contours beyond flat. Split tasks are read with
 their gaps (`splits`: each after so much work, for so long), which move with
 the task. Not supported: blank task-sheet rows and inserted subprojects.
 

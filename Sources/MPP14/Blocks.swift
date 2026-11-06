@@ -141,6 +141,15 @@ public enum MPP {
 
     /// Task fields (`0x0B40` class).
     public enum TaskField {
+        /// Costs in hundredths of the currency (f64). 171 and 172 are the
+        /// fixed cost's actual and remaining parts.
+        public static let cost: UInt32 = 5
+        public static let actualCost: UInt32 = 7
+        public static let fixedCost: UInt32 = 8
+        public static let remainingCost: UInt32 = 10
+        public static let actualFixedCost: UInt32 = 171
+        public static let remainingFixedCost: UInt32 = 172
+        public static let fixedCostAccrual: UInt32 = 200
         public static let uniqueID: UInt32 = 86
         public static let id: UInt32 = 23
         public static let name: UInt32 = 14
@@ -213,6 +222,20 @@ public enum MPP {
         public static let guid: UInt32 = 728
         public static let calendarGUID: UInt32 = 729
         public static let position: UInt32 = 730
+        /// Pay per hour (f64), as in cost rate table A's first rate; cost per
+        /// use and costs in hundredths of the currency (f64).
+        public static let standardRate: UInt32 = 6
+        public static let overtimeRate: UInt32 = 7
+        public static let actualCost: UInt32 = 11
+        public static let cost: UInt32 = 12
+        public static let costPerUse: UInt32 = 18
+        public static let accrueAt: UInt32 = 19
+        public static let remainingCost: UInt32 = 21
+        /// Var data: cost rate tables A to E, when they hold more than one
+        /// rate or differ from the fields above.
+        public static let costRateTables: [UInt32] = [61, 62, 63, 64, 65]
+        /// u16: 8 on a material resource, 2 on a work or cost resource.
+        public static let typeFlags: UInt32 = 70
     }
 
     /// Assignment fields (`0x0F40` class).
@@ -238,6 +261,11 @@ public enum MPP {
         public static let actualStart: UInt32 = 22
         public static let actualFinish: UInt32 = 23
         public static let percentWorkComplete: UInt32 = 43
+        /// Costs in hundredths of the currency (f64); the rate table as 0-4.
+        public static let cost: UInt32 = 26
+        public static let actualCost: UInt32 = 28
+        public static let remainingCost: UInt32 = 29
+        public static let costRateTable: UInt32 = 80
         /// Booleans: the assignment has started / has finished. Microsoft 365
         /// files have no fixed slot for the actual start, finish or % work
         /// complete above; these two bits are what records progress (0/0

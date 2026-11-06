@@ -539,6 +539,10 @@ public final class MPP14File {
             task.taskType = k.u16(i, MPP.TaskField.taskType)
                 .flatMap { MPP.taskTypes[$0] } ?? "fixed_units"
             task.effortDriven = k.flag(i, MPP.TaskField.effortDriven)
+            task.fixedCost = (k.f64(i, MPP.TaskField.fixedCost) ?? 0) / 100
+            task.fixedCostAccrual = MPP.accrual(k.u16(i, MPP.TaskField.fixedCostAccrual))
+            task.cost = (k.f64(i, MPP.TaskField.cost) ?? 0) / 100
+            task.actualCost = (k.f64(i, MPP.TaskField.actualCost) ?? 0) / 100
             task.manual = k.flag(i, MPP.TaskField.manuallyScheduled)
             // A manual task's Start/Finish fields hold what the scheduler would
             // have computed; the dates Project shows are the manual pair.
@@ -595,6 +599,9 @@ public final class MPP14File {
             r.maxUnits = (units * 10_000).rounded() / 10_000
             if let cal = k.i32(i, MPP.ResourceField.calendarUID), cal > 0 { r.calendarUID = Int(cal) }
             r.guid = k.bytes(i, MPP.ResourceField.guid, count: 16) ?? []
+            if k.u16(i, MPP.ResourceField.typeFlags) == 8 { r.type = "material" }
+            r.costRateTables = Self.readCostRateTables(k, i: i, uid: Int(uid))
+            r.accrueAt = MPP.accrual(k.u16(i, MPP.ResourceField.accrueAt))
             r.baselines = Self.readResourceBaselines(k, uid: Int(uid))
             readCustomFields(k, uid: Int(uid), resource: true,
                                   text: &r.text, numbers: &r.numbers,
@@ -605,6 +612,21 @@ public final class MPP14File {
             out.append(r)
         }
         return out.sorted { ($0.rowID, $0.uid) < ($1.rowID, $1.uid) }
+    }
+
+    /// Cost rate tables A to E. Table A falls back on the resource's own rate
+    /// fields; the others are empty (no cost) unless the file has them.
+    static func readCostRateTables(_ k: EntityClass, i: Int, uid: Int) -> [[PayRate]] {
+        let R = MPP.ResourceField.self
+        var tables = R.costRateTables.map { k.varBytes(uid, $0).map(MPP.payRates) ?? [] }
+        if tables[0].isEmpty, let std = k.f64(i, R.standardRate) {
+            tables[0] = [PayRate(standardPerHour: std, overtimePerHour: k.f64(i, R.overtimeRate) ?? 0,
+                                 costPerUse: (k.f64(i, R.costPerUse) ?? 0) / 100)]
+        }
+        // No rate anywhere (a cost resource, or work nobody pays for): nothing
+        // to work a cost out from.
+        let paid = tables.contains { $0.contains { $0.standardPerHour != 0 || $0.costPerUse != 0 } }
+        return paid ? tables : []
     }
 
     /// The assignments, and each split task's gaps as its first assignment's
@@ -631,6 +653,9 @@ public final class MPP14File {
             a.workHours = Self.hours(k.f64(i, MPP.AssignmentField.work))
             a.start = k.timestamp(i, MPP.AssignmentField.start)
             a.finish = k.timestamp(i, MPP.AssignmentField.finish)
+            a.costRateTable = min(4, Int(k.u16(i, MPP.AssignmentField.costRateTable) ?? 0))
+            a.cost = (k.f64(i, MPP.AssignmentField.cost) ?? 0) / 100
+            a.actualCost = (k.f64(i, MPP.AssignmentField.actualCost) ?? 0) / 100
             if let auid = k.u32(i, MPP.AssignmentField.uniqueID) {
                 a.uid = Int(auid)
                 a.baselines = Self.readAssignmentBaselines(k, uid: Int(auid))
