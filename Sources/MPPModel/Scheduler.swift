@@ -168,6 +168,11 @@ public enum Scheduler {
                 let wt = try time(for: task)
                 let minutes = durationMinutes(task)
                 let isMilestone = minutes == 0
+                // A gap the shorter task no longer reaches goes.
+                if !task.splits.isEmpty {
+                    task.splits = task.splits.filter { $0.workMinutes > 0 && $0.workMinutes < minutes }
+                    task.splitMinutes = task.splits.reduce(0) { $0 + $1.idleMinutes }
+                }
                 let span = minutes + task.splitMinutes
 
                 // A Start No Earlier Than replaces the project start as the

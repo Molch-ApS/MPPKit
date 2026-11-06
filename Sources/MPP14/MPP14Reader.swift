@@ -199,7 +199,7 @@ public final class MPP14File {
         let calendars = readCalendars()
         let tasks = try readTasks(calendarNames: calendars.names)
         let resources = readResources()
-        let assignments = readAssignments()
+        let (assignments, splits) = readAssignments()
         let relations = readRelations()
 
         let start = props[MPP.PropsKey.projectStartDate].flatMap {
@@ -211,6 +211,9 @@ public final class MPP14File {
             MPP.decodeTimestamp($0, offset: 0)
         }
         project.tasks = tasks
+        for i in project.tasks.indices where !project.tasks[i].manual {
+            if let gaps = splits[project.tasks[i].uid] { project.tasks[i].splits = gaps }
+        }
         project.resources = resources
         // Nor is an assignment to a task that is gone.
         let taskUIDs = Set(tasks.map(\.uid))
@@ -604,14 +607,22 @@ public final class MPP14File {
         return out.sorted { ($0.rowID, $0.uid) < ($1.rowID, $1.uid) }
     }
 
-    private func readAssignments() -> [Assignment] {
+    /// The assignments, and each split task's gaps as its first assignment's
+    /// planned work lays them out (a task with no resource has a hidden one).
+    private func readAssignments() -> ([Assignment], [Int: [TaskSplit]]) {
         let k = EntityClass(root: root, storage: "\(MPP.projectStorage)/TBkndAssn",
                             metaSize: MPP.assignmentMetaSize, meta2Size: 53,
                             propsKey: MPP.PropsKey.assignmentFieldMap, props: props)
         var out: [Assignment] = []
+        var splits: [Int: [TaskSplit]] = [:]
         for i in 0..<k.records.count {
             guard let taskUID = k.u32(i, MPP.AssignmentField.taskUniqueID),
                   let resourceUID = k.i32(i, MPP.AssignmentField.resourceUniqueID) else { continue }
+            if taskUID != 0, splits[Int(taskUID)] == nil, let auid = k.u32(i, MPP.AssignmentField.uniqueID),
+               let planned = k.varBytes(Int(auid), MPP.AssignmentField.plannedWork) {
+                let gaps = MPP.splitGaps(planned)
+                if !gaps.isEmpty { splits[Int(taskUID)] = gaps }
+            }
             // Negative resource uids are Project's "unassigned" placeholders.
             if taskUID == 0 || resourceUID <= 0 { continue }
             var a = Assignment(taskUID: Int(taskUID), resourceUID: Int(resourceUID))
@@ -626,7 +637,7 @@ public final class MPP14File {
             }
             out.append(a)
         }
-        return out
+        return (out, splits)
     }
 
     /// Custom field names from `TBkndTask/Props`, key 0x04400001: a length,

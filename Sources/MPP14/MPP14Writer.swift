@@ -1413,6 +1413,10 @@ private final class Session {
                     // duration × 8 at +24.
                     if p == 100 {
                         payload = Self.remainingAt100(units: spec.units, work: work, tenths: tenths)
+                    } else if p == 0, tenths > 0, !task.splits.isEmpty {
+                        // A split task moved or changed: its work around the
+                        // same gaps, as Project lays it out.
+                        payload = MPP.splitPlannedWork(minutes: tenths / 10, units: spec.units, gaps: task.splits)
                     } else {
                         // A zero-work row (a milestone) carries no units, as Project writes it.
                         payload.replaceSubrange(8..<16, with: le(tenths == 0 ? 0 : spec.units * W.pctScale * 16))

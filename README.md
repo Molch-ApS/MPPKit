@@ -152,8 +152,10 @@ availability and assignment custom fields are saved as they were, as are
 custom-field definitions (value lists, formulas, indicators). Fields MPPKit
 writes keep Project's bytes while unchanged: notes stay RTF, value-list
 entries stay linked, baselines keep their timephased data. A split task's
-splits are kept until its dates, work or progress change; then its work is
-written as one piece. `KeepTests` checks this on files Project saved.
+timephased work is kept until its dates, work or progress change; then its
+work is laid out again around the same gaps (a task with progress is written
+in one piece). `KeepTests` and `SplitTaskTests` check this on files Project
+saved.
 
 Also: Microsoft Project XML (MSPDI) export and import (`MSPDI`), with the same
 fields, for tools and Project versions that do not read `.mpp`. Files from
@@ -163,9 +165,9 @@ Project 2007 and earlier are recognised and refused with a clear message
 Not yet modelled (kept on save, but not read into `Project` or recalculated):
 cost and rates, material and cost resources, outline codes, hyperlinks,
 recurring tasks, and timephased assignment contours beyond flat. Costs Project
-calculated are not recalculated after an edit. Split tasks are read as their
-idle time (`splitMinutes`, kept by the scheduler) rather than as individual
-splits. Not supported: blank task-sheet rows and inserted subprojects.
+calculated are not recalculated after an edit. Split tasks are read with
+their gaps (`splits`: each after so much work, for so long), which move with
+the task. Not supported: blank task-sheet rows and inserted subprojects.
 
 Two things Project enforces that the writer does not check:
 

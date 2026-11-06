@@ -132,7 +132,8 @@ final class KeepTests: XCTestCase {
     }
 
     /// A split task's work is laid out in its assignment's timephased data;
-    /// it is kept while the task is unchanged and rebuilt once it is edited.
+    /// it is kept while the task is unchanged and laid out afresh, around the
+    /// same gaps, once it is edited.
     func testSplitTasksKeepTheirSplitsUntilEdited() throws {
         let file = try corpus("mpp14splittask.mpp")
         var project = try MPP14File(bytes: file).readProject()
@@ -147,7 +148,7 @@ final class KeepTests: XCTestCase {
         let key = try XCTUnwrap(before.keys.first { $0 / 1_000_000 == uid })
         XCTAssertNotNil(after[key]?[49])
         XCTAssertNotEqual(after[key]?[49], before[key]?[49], "an edited task's work is laid out afresh")
-        XCTAssertEqual(after[key]?[49].flatMap { BinaryReader($0).u16(at: 0) }, 0, "in one piece")
+        XCTAssertEqual(after[key]?[49].flatMap { BinaryReader($0).u16(at: 0) }, 3, "still split")
         XCTAssertTrue(try MPP14File(bytes: edited).conformanceIssues().isEmpty)
     }
 

@@ -100,7 +100,8 @@ extension Project {
                   a.constraint == b.constraint, a.constraintDate == b.constraintDate,
                   a.deadline == b.deadline, a.percentComplete == b.percentComplete,
                   a.actualStart == b.actualStart, a.actualFinish == b.actualFinish,
-                  a.manual == b.manual, a.calendar == b.calendar, a.splitMinutes == b.splitMinutes,
+                  a.manual == b.manual, a.calendar == b.calendar,
+                  a.splitMinutes == b.splitMinutes, a.splits == b.splits,
                   a.milestone == b.milestone else { return false }
             // A manual task's dates are typed in, so they are inputs too.
             if a.manual, a.start != b.start || a.finish != b.finish { return false }
@@ -137,6 +138,7 @@ extension Project {
         for i in tasks.indices {
             let t = tasks[i]
             guard !summaries.contains(t.uid), !t.manual, !t.isElapsed, let s = t.start, let f = t.finish else { continue }
+            if !t.splits.isEmpty { tasks[i].splitMinutes = t.splits.reduce(0) { $0 + $1.idleMinutes }; continue }
             let gap = time(t).minutes(from: s, to: f) - Int((t.durationDays * Double(minutesPerDay)).rounded())
             tasks[i].splitMinutes = gap > 1 ? gap : 0
         }
