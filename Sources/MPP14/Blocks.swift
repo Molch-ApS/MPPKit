@@ -635,10 +635,16 @@ public enum MPP {
         // A plan whose tasks were deleted can keep far more room than that (424
         // tasks in 454 items of 96 bytes): sizes that leave room for every
         // declared item, nearest the preferred size first.
-        let roomy = (8...max(8, body)).filter { body % $0 == 0 && body / $0 >= declaredCount }
-            .filter { abs($0 - preferred) <= max(8, preferred / 8) }
-            .sorted { abs($0 - preferred) < abs($1 - preferred) }
-        return roomy + [preferred, preferred + 1, preferred - 1].filter { $0 > 0 && !roomy.contains($0) }
+        let reach = max(8, preferred / 8)
+        var roomy: [Int] = []
+        for size in 8...max(8, body) where body % size == 0 && body / size >= declaredCount {
+            if abs(size - preferred) <= reach { roomy.append(size) }
+        }
+        roomy.sort { abs($0 - preferred) < abs($1 - preferred) }
+        for size in [preferred, preferred + 1, preferred - 1] where size > 0 && !roomy.contains(size) {
+            roomy.append(size)
+        }
+        return roomy
     }
 
     /// Under the correct item size every item's FixedData offset at +4 is a
