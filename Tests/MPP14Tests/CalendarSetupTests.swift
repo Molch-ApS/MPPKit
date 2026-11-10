@@ -168,10 +168,8 @@ final class CalendarSetupTests: XCTestCase {
     private func template() throws -> [UInt8] {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Projects/Resources/Blank-Template.mpp")
-        guard let data = try? Data(contentsOf: url) else { throw XCTSkip("no Blank-Template.mpp") }
-        return [UInt8](data)
+            .appendingPathComponent("Samples/Blank-Template.mpp")
+        return [UInt8](try Data(contentsOf: url))
     }
 
     func testShiftsHolidaysAndRenamesSurviveASave() throws {
@@ -219,13 +217,6 @@ final class CalendarSetupTests: XCTestCase {
         XCTAssertEqual(reread.calendar?.name, "Site Team")
     }
 
-    private func blankTemplate() throws -> [UInt8] {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Samples/Blank-Template.mpp")
-        return [UInt8](try Data(contentsOf: url))
-    }
-
     /// Each task's calendar uid, from the task records.
     private func taskCalendarUIDs(_ bytes: [UInt8]) throws -> [Int: Int] {
         let file = try MPP14File(bytes: bytes)
@@ -252,7 +243,7 @@ final class CalendarSetupTests: XCTestCase {
     /// read from a file are found by their uid, so such a file saves, and
     /// each task keeps the calendar it had.
     func testCalendarsSharingANameOrWithoutOneSave() throws {
-        var p = try MPP14File(bytes: try blankTemplate()).readProject()
+        var p = try MPP14File(bytes: try template()).readProject()
         p.tasks = []
         p.relations = []
         p.resources = []
@@ -270,7 +261,7 @@ final class CalendarSetupTests: XCTestCase {
         }
         p.normalizeOutline()
         try Scheduler.schedule(&p)
-        let first = try MPP14Writer(template: try blankTemplate()).build(p)
+        let first = try MPP14Writer(template: try template()).build(p)
         let uids = try taskCalendarUIDs(first)
 
         // Both crews renamed "Crew", the third left without a name.
