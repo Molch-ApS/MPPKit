@@ -476,26 +476,27 @@ private final class Session {
             }
         }
 
-        // Percent complete, summaries weighted by duration.
+        // Percent complete as Project rolls it up: a summary's is that of
+        // the tasks at the bottom under it, each weighted by its duration,
+        // however deep they sit (a sub-phase does not count by its span).
         var pct: [Int: Int] = [:]
-        func weighted(_ uids: [Int]) -> Int {
-            var total = 0, done = 0
-            for uid in uids {
-                let tenths = eff[uid]?.tenths ?? 0
-                total += tenths
-                done += tenths * (pct[uid] ?? 0)
-            }
-            return total == 0 ? 0 : Int((Double(done) / Double(total)).rounded())
+        var durationDone: [Int: (total: Double, done: Double)] = [:]
+        func rolled(_ uids: [Int]) -> (total: Double, done: Double) {
+            uids.reduce((0, 0)) { ($0.total + (durationDone[$1]?.total ?? 0), $0.done + (durationDone[$1]?.done ?? 0)) }
         }
+        func percent(_ r: (total: Double, done: Double)) -> Int { r.total > 0 ? Int((r.done / r.total).rounded()) : 0 }
         for t in deepestFirst {
             if let kids = children[t.uid], !kids.isEmpty {
-                pct[t.uid] = weighted(kids)
+                durationDone[t.uid] = rolled(kids)
+                pct[t.uid] = percent(durationDone[t.uid]!)
             } else {
+                let tenths = Double(eff[t.uid]?.tenths ?? 0)
+                durationDone[t.uid] = (tenths, tenths * Double(t.percentComplete))
                 pct[t.uid] = t.percentComplete
             }
         }
         let top = project.tasks.filter { $0.parentUID == 0 }
-        let pct0 = weighted(top.map(\.uid))
+        let pct0 = percent(rolled(top.map(\.uid)))
 
         // Work in milli-minutes per assignment: what the file holds while
         // nothing it depends on has changed (a contour, overtime or a part-time
@@ -533,11 +534,20 @@ private final class Session {
         for (i, a) in project.assignments.enumerated() where keptWork[i] { taskWorkKept.insert(a.taskUID) }
         for (i, a) in project.assignments.enumerated() where !keptWork[i] { taskWorkKept.remove(a.taskUID) }
         var workSum: [Int: Double] = [:]
+        // Work done, rolled up the same way: a summary's % work complete is
+        // its tasks' actual work over their work.
+        var workDone: [Int: Double] = [:]
+        var workPct: [Int: Int] = [:]
         for t in deepestFirst {
             var sum = directWork[t.uid] ?? 0
-            for kid in children[t.uid] ?? [] { sum += workSum[kid] ?? 0 }
+            var done = sum * Double(pct[t.uid] ?? 0) / 100
+            for kid in children[t.uid] ?? [] { sum += workSum[kid] ?? 0; done += workDone[kid] ?? 0 }
             workSum[t.uid] = sum
+            workDone[t.uid] = done
+            if !(children[t.uid] ?? []).isEmpty, sum > 0 { workPct[t.uid] = Int((done / sum * 100).rounded()) }
         }
+        let topWork = top.reduce(0) { $0 + workSum[$1.uid]! }
+        let workPct0 = topWork > 0 ? Int((top.reduce(0) { $0 + workDone[$1.uid]! } / topWork * 100).rounded()) : nil
 
         let pStart = project.tasks.map { eff[$0.uid]!.start }.min() ?? project.start
         let pFinish = project.tasks.map { eff[$0.uid]!.finish }.max() ?? project.start
@@ -564,7 +574,8 @@ private final class Session {
                   start: Date, finish: Date, tenths: Int, level: Int, parentUID: Int,
                   guid: [UInt8], parentGUID: [UInt8], isSummary: Bool, position: Int,
                   task: MPPModel.ProjectTask?, percent: Int, work: Double,
-                  baselines: [Int: Baseline], calendarUID: Int?, keepsWork: Bool = false) {
+                  baselines: [Int: Baseline], calendarUID: Int?, keepsWork: Bool = false,
+                  workPercent: Int? = nil) {
             var e = Editor(row: proto.row, fm: taskMap.fm, bits: taskMap.bits)
             let F = MPP.TaskField.self
             e.u32(F.uniqueID, UInt32(uid))
@@ -642,12 +653,13 @@ private final class Session {
 
             let actualTenths = Int((Double(tenths) * Double(percent) / 100).rounded())
             e.u16(F.percentComplete, UInt16(percent))
-            e.u16(F.percentWorkComplete, UInt16(percent))
+            let workPercent = workPercent ?? percent
+            e.u16(F.percentWorkComplete, UInt16(workPercent))
             e.i32(F.actualDuration, Int32(actualTenths))
             e.i32(F.remainingDuration, Int32(tenths - actualTenths))
             if !keepsWork {
-                e.f64(F.actualWork, work * Double(percent) / 100)
-                e.f64(F.remainingWork, work * Double(100 - percent) / 100)
+                e.f64(F.actualWork, work * Double(workPercent) / 100)
+                e.f64(F.remainingWork, work * Double(100 - workPercent) / 100)
             }
             if percent > 0 {
                 e.ts(F.actualStart, start)
@@ -828,7 +840,7 @@ private final class Session {
              tenths: time.minutes(from: pStart, to: pFinish) * 10, level: 0, parentUID: 0,
              guid: summaryGUID, parentGUID: [UInt8](repeating: 0, count: 16), isSummary: true,
              position: 1, task: nil, percent: pct0,
-             work: top.reduce(0) { $0 + workSum[$1.uid]! }, baselines: summaryBaselines, calendarUID: nil)
+             work: topWork, baselines: summaryBaselines, calendarUID: nil, workPercent: workPct0)
         for (n, t) in project.tasks.enumerated() {
             let e = eff[t.uid]!
             let parentGUID = t.parentUID == 0 ? summaryGUID : byUID[t.parentUID]!.guid
@@ -854,7 +866,8 @@ private final class Session {
                  tenths: e.tenths, level: t.outlineLevel, parentUID: t.parentUID, guid: t.guid,
                  parentGUID: parentGUID, isSummary: !(children[t.uid] ?? []).isEmpty, position: n + 2,
                  task: t, percent: pct[t.uid]!, work: workSum[t.uid]!, baselines: t.baselines,
-                 calendarUID: calUID, keepsWork: ownRecord != nil && taskWorkKept.contains(t.uid))
+                 calendarUID: calUID, keepsWork: ownRecord != nil && taskWorkKept.contains(t.uid),
+                 workPercent: workPct[t.uid])
         }
         writeTable("TBkndTask", tasks, rows: taskRows, vars: taskVars, fieldClass: MPP.FieldClass.task)
 

@@ -479,6 +479,24 @@ extension Project {
         }
         return leaves.reduce(0) { $0 + $1.durationDays * Double($1.percentComplete) } / total
     }
+
+    /// A summary task's % complete as Project rolls it up, and as the writer
+    /// saves it: the tasks at the bottom under it, each weighted by its
+    /// duration, however deep they sit. A sub-phase does not count by its
+    /// own span. `uid` 0 is the whole project.
+    public func percentComplete(under uid: Int) -> Double {
+        var kids: [Int: [ProjectTask]] = [:]
+        for t in tasks { kids[t.parentUID, default: []].append(t) }
+        var leaves: [ProjectTask] = []
+        var queue = kids[uid] ?? []
+        while let t = queue.popLast() {
+            if let more = kids[t.uid], !more.isEmpty, t.uid != 0 { queue += more } else { leaves.append(t) }
+        }
+        // A summary of milestones shows 0 %, done or not.
+        let total = leaves.reduce(0) { $0 + $1.durationDays }
+        guard total > 0 else { return 0 }
+        return leaves.reduce(0) { $0 + $1.durationDays * Double($1.percentComplete) } / total
+    }
 }
 
 // MARK: - Update Project
