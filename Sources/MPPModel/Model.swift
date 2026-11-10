@@ -567,6 +567,10 @@ public struct Project: Sendable, Equatable {
     public var outlineCodeDefinitions: [Int: OutlineCodeDefinition] = [:]
 
     public var statusDate: Date?
+    /// Project's "Split in-progress tasks" (on by default): when a started
+    /// task's predecessor moves later, the part still to do moves after it
+    /// and the done part stays. Off, a started task stays where it is.
+    public var splitsInProgressTasks: Bool = true
     /// Project's "Tasks are critical if slack is less than or equal to", in
     /// days. 0 is Project's default.
     public var criticalSlackDays: Double = 0

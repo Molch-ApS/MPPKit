@@ -260,6 +260,9 @@ public final class MPP14File {
            let u = BinaryReader(raw).u32(at: 0), u != 0xFFFF_FFFF {
             project.statusDate = MPP.decodeTimestamp(raw, offset: 0)
         }
+        if let raw = props[MPP.PropsKey.splitInProgressTasks], let v = BinaryReader(raw).u16(at: 0) {
+            project.splitsInProgressTasks = v != 0
+        }
         Self.applyDocumentProperties(to: &project, root: root)
         // What Project has no field for: in custom properties, or in the
         // streams files written before kept it in. The properties are

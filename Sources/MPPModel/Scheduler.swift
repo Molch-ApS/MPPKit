@@ -173,7 +173,7 @@ public enum Scheduler {
                     task.splits = task.splits.filter { $0.workMinutes > 0 && $0.workMinutes < minutes }
                     task.splitMinutes = task.splits.reduce(0) { $0 + $1.idleMinutes }
                 }
-                let span = minutes + task.splitMinutes
+                var span = minutes + task.splitMinutes
 
                 // A Start No Earlier Than replaces the project start as the
                 // floor, so a task can be set to have begun before it — as in
@@ -201,8 +201,26 @@ public enum Scheduler {
                 // Work that has begun stays where it began — as in Project, an
                 // actual start pins the task even before any progress is entered.
                 let started = task.actualStart
+                let wanted = start
                 if let a = started { start = a; finishFloor = nil }
                 if !isMilestone, started == nil { start = wt.nextWorkingMoment(start) }
+                // Under way and wanted later: with "Split in-progress tasks"
+                // on, the part still to do resumes at the date the links and
+                // constraints give, and the done part stays (as in Project).
+                if let a = started, project.splitsInProgressTasks, !isMilestone, !task.isElapsed,
+                   task.percentComplete > 0, task.percentComplete < 100 {
+                    let done = Int((Double(minutes) * Double(task.percentComplete) / 100).rounded())
+                    let earlier = task.splits.filter { $0.workMinutes < done }
+                    let stop = wt.advance(a, minutes: done + earlier.reduce(0) { $0 + $1.idleMinutes })
+                    let resume = wt.nextWorkingMoment(wanted)
+                    if resume > stop {
+                        let idle = wt.minutes(from: stop, to: resume)
+                        task.splits = (earlier + [TaskSplit(workMinutes: done, idleMinutes: idle)]
+                            + task.splits.filter { $0.workMinutes > done })
+                        task.splitMinutes = task.splits.reduce(0) { $0 + $1.idleMinutes }
+                        span = minutes + task.splitMinutes
+                    }
+                }
                 var finish = isMilestone ? start : after(start, span, task, wt)
                 if let floor = finishFloor {
                     let fromFinish = isMilestone ? floor : before(floor, span, task, wt)
