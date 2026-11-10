@@ -10,6 +10,7 @@
 
 import XCTest
 import Foundation
+@testable import MPP14
 import MPPKit
 
 /// Shifts, holiday sets, and calendars renamed, added and deleted — in the
@@ -216,5 +217,104 @@ final class CalendarSetupTests: XCTestCase {
         XCTAssertEqual(reread.calendars.first?.uid, crew.uid, "renamed in place")
         XCTAssertEqual(reread.calendars.first?.holidays.map(\.country), ["ES"])
         XCTAssertEqual(reread.calendar?.name, "Site Team")
+    }
+
+    private func blankTemplate() throws -> [UInt8] {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Samples/Blank-Template.mpp")
+        return [UInt8](try Data(contentsOf: url))
+    }
+
+    /// Each task's calendar uid, from the task records.
+    private func taskCalendarUIDs(_ bytes: [UInt8]) throws -> [Int: Int] {
+        let file = try MPP14File(bytes: bytes)
+        let base = "\(MPP.projectStorage)/TBkndTask"
+        var fm: [UInt32: MPP.FieldItem] = [:]
+        for item in MPP.parseFieldMap(file.props[MPP.PropsKey.taskFieldMap] ?? []) where item.inFixed {
+            if fm[item.nativeID] == nil { fm[item.nativeID] = item }
+        }
+        let meta = try MPP.parseFixedMetaAuto(try file.root.stream(path: "\(base)/FixedMeta"),
+                                              defaultItemSize: MPP.taskMetaSize)
+        let rows = MPP.splitFixedData(try file.root.stream(path: "\(base)/FixedData"),
+                                      metaItems: MPP.declaredItems(meta))
+        var out: [Int: Int] = [:]
+        for row in rows where row.count > 100 {
+            guard let uid = fm[MPP.TaskField.uniqueID].flatMap({ BinaryReader(row).u32(at: $0.offset) }),
+                  let cal = fm[MPP.TaskField.calendarUniqueID].flatMap({ BinaryReader(row).i32(at: $0.offset) })
+            else { continue }
+            out[Int(uid)] = Int(cal)
+        }
+        return out
+    }
+
+    /// Project lets two base calendars share a name, or have none. Calendars
+    /// read from a file are found by their uid, so such a file saves, and
+    /// each task keeps the calendar it had.
+    func testCalendarsSharingANameOrWithoutOneSave() throws {
+        var p = try MPP14File(bytes: try blankTemplate()).readProject()
+        p.tasks = []
+        p.relations = []
+        p.resources = []
+        p.assignments = []
+        var sixDays = ProjectCalendar(name: "Crew A")
+        for day in 2...7 { sixDays.week[day] = ProjectCalendar.defaultWorkingDay }
+        var early = ProjectCalendar(name: "Crew B")
+        for day in 2...6 { early.week[day] = [420...900] }
+        p.calendars = [sixDays, early, ProjectCalendar(name: "Crew C")]
+        for (uid, cal) in [(1, "Crew A"), (2, "Crew B"), (3, "Crew C")] {
+            var t = ProjectTask(uid: uid, name: "Task \(uid)")
+            t.outlineLevel = 1
+            t.calendar = cal
+            p.tasks.append(t)
+        }
+        p.normalizeOutline()
+        try Scheduler.schedule(&p)
+        let first = try MPP14Writer(template: try blankTemplate()).build(p)
+        let uids = try taskCalendarUIDs(first)
+
+        // Both crews renamed "Crew", the third left without a name.
+        var q = try MPP14File(bytes: first).readProject()
+        for i in q.calendars.indices {
+            switch q.calendars[i].name {
+            case "Crew A", "Crew B": q.calendars[i].name = "Crew"
+            case "Crew C": q.calendars[i].name = ""
+            default: break
+            }
+        }
+        for i in q.tasks.indices { q.tasks[i].calendar = q.tasks[i].uid == 3 ? "" : "Crew" }
+        let second = try MPP14Writer(template: first).build(q)
+        XCTAssertEqual(try taskCalendarUIDs(second), uids)
+        let back = try MPP14File(bytes: second).readProject()
+        XCTAssertEqual(back.calendars.map(\.name).filter { $0.hasPrefix("Crew") || $0.isEmpty }.sorted(),
+                       ["", "Crew", "Crew"])
+        XCTAssertEqual(back.calendars.first { $0.uid == uids[1] }?.week[7] ?? nil, ProjectCalendar.defaultWorkingDay)
+        XCTAssertEqual(back.calendars.first { $0.uid == uids[2] }?.week[2] ?? nil, [420...900])
+
+        // Saved over itself again, nothing moves.
+        let third = try MPP14Writer(template: second).build(back)
+        XCTAssertEqual(try taskCalendarUIDs(third), uids)
+    }
+
+    /// A Project 2013 file from MPXJ's corpus with ten unnamed base
+    /// calendars saves over itself with all of them. Skips without the corpus
+    /// (`Tools/ci/fetch-corpus.sh`).
+    func testCorpusFileWithUnnamedCalendarsSaves() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let dir = ProcessInfo.processInfo.environment["MPP_CORPUS"].map { URL(fileURLWithPath: $0) }
+            ?? root.appendingPathComponent("Corpus")
+        let url = dir.appendingPathComponent("ResourceIdAndUniqueId-project2013-mpp14.mpp")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("no corpus in \(dir.path) — run Tools/ci/fetch-corpus.sh")
+        }
+        let bytes = [UInt8](try Data(contentsOf: url))
+        let read = try MPP14File(bytes: bytes).readProject()
+        XCTAssertEqual(read.calendars.filter { $0.name.isEmpty }.count, 10)
+        let back = try MPP14File(bytes: try MPP14Writer(template: bytes).build(read)).readProject()
+        XCTAssertEqual(back.calendars.map(\.uid), read.calendars.map(\.uid))
+        XCTAssertEqual(back.calendars, read.calendars)
+        XCTAssertEqual(back.tasks, read.tasks)
+        XCTAssertEqual(back.resources.map(\.name), read.resources.map(\.name))
     }
 }
