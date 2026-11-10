@@ -425,19 +425,28 @@ extension Project {
 
     /// Each assignment's work in hours, in `assignments` order: what the file
     /// holds when the plan as it was read (`was`) has the same assignment with
-    /// the same units, on a task with the same dates, duration, splits,
-    /// calendar and progress; otherwise the task's duration × units × hours
+    /// the same units and dates, on a task with the same dates, duration,
+    /// splits, calendar and progress; otherwise the task's duration × units × hours
     /// per day. Project keeps an assignment's work as it is until one of
     /// these changes, and a contoured, part-time or overtime assignment does
     /// not hold duration × units of it.
     public func assignmentWorkHours(keepingFrom was: Project? = nil) -> [Double] {
         let hoursPerDay = Double(minutesPerDay) / 60
         let byUID = Dictionary(tasks.map { ($0.uid, $0) }, uniquingKeysWith: { a, _ in a })
-        return assignments.map { a in
+        let kept = keepsAssignmentWork(keepingFrom: was)
+        return assignments.indices.map { i in
+            let a = assignments[i]
             guard let t = byUID[a.taskUID] else { return 0 }
-            if let was, was.minutesPerDay == minutesPerDay, Self.sameWorkInputs(a, t, in: was) { return a.workHours }
-            return t.durationDays * hoursPerDay * a.units
+            return kept[i] ? a.workHours : t.durationDays * hoursPerDay * a.units
         }
+    }
+
+    /// Per assignment, in `assignments` order: whether the work the file
+    /// holds still stands (see `assignmentWorkHours`).
+    public func keepsAssignmentWork(keepingFrom was: Project?) -> [Bool] {
+        guard let was, was.minutesPerDay == minutesPerDay else { return assignments.map { _ in false } }
+        let byUID = Dictionary(tasks.map { ($0.uid, $0) }, uniquingKeysWith: { a, _ in a })
+        return assignments.map { a in byUID[a.taskUID].map { Self.sameWorkInputs(a, $0, in: was) } ?? false }
     }
 
     static func sameWorkInputs(_ a: Assignment, _ t: ProjectTask, in was: Project) -> Bool {
@@ -448,6 +457,7 @@ extension Project {
             && wt.durationUnits == t.durationUnits && wt.percentComplete == t.percentComplete
             && wt.splits == t.splits && wt.calendar == t.calendar
             && wa.units == a.units && wa.workHours == a.workHours
+            && wa.start == a.start && wa.finish == a.finish
     }
 
     /// Drop baseline `slot` everywhere.
