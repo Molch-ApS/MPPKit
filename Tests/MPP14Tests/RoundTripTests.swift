@@ -34,15 +34,13 @@ final class RoundTripTests: XCTestCase {
     /// "save" for a file that cannot be saved. Each line is a known gap;
     /// remove it once fixed (the test fails on a line no longer needed).
     private static let knownDifferences: [String: Set<String>] = [
-        // Ten unnamed base calendars: refused as duplicate names.
-        "ResourceIdAndUniqueId-project2013-mpp14.mpp": ["save"],
-        // The project calendar is "24 Hours": the Standard calendar is
-        // written under its name.
-        "mpp14header.mpp": ["calendar", "calendars"],
         // Blank task rows are not supported: the rows after one are renumbered.
         "mpp14nulltasks.mpp": ["rowID"],
         // Inserted subprojects are not supported.
         "mpp14subproject.mpp": ["summary"],
+        // Not a difference: mpp14timephasedsegmentsmanualoffsets.mpp reads
+        // back the same, but is not checked in Project (Project hangs on
+        // the original).
     ]
 
     private func equal<T: Equatable>(_ a: T, _ b: Any) -> Bool { (b as? T) == a }
