@@ -34,14 +34,6 @@ final class RoundTripTests: XCTestCase {
     /// "save" for a file that cannot be saved. Each line is a known gap;
     /// remove it once fixed (the test fails on a line no longer needed).
     private static let knownDifferences: [String: Set<String>] = [
-        // Tasks after an FF or SF link, a link on their summary or none at
-        // all are given a Start No Earlier Than constraint at their start.
-        "mpp14barstyle.mpp": ["constraint", "constraintDate"],
-        "mpp14baseline.mpp": ["constraint", "constraintDate"],
-        "mpp14embedded.mpp": ["constraint", "constraintDate"],
-        "mpp14relations.mpp": ["constraint", "constraintDate"],
-        "mpp14resource.mpp": ["constraint", "constraintDate"],
-        "mpp14timephased.mpp": ["constraint", "constraintDate"],
         // Blank task rows are not supported: the rows after one are renumbered.
         "mpp14nulltasks.mpp": ["rowID"],
         // Inserted subprojects are not supported.
