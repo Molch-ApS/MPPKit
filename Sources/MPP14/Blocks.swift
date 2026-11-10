@@ -181,6 +181,8 @@ public enum MPP {
         public static let manualDuration: UInt32 = 1288
         public static let manualDurationUnits: UInt32 = 1289
         /// The flag M365 actually reads; `TASK_MODE` (1280) stays set either way.
+        /// Files saved before Project 2016 leave it out of the field map; see
+        /// `taskModeMask`.
         public static let manuallyScheduled: UInt32 = 1408
         public static let notes: UInt32 = 15
         public static let constraintType: UInt32 = 17
@@ -290,6 +292,7 @@ public enum MPP {
     /// | `projectStart` | start | start |
     /// | `predecessor` | predecessor's finish | predecessor's finish |
     /// | `summary` | none | none |
+    /// | `manual` (not started) | start | start |
     ///
     /// The writer reproduces these combinations exactly. (Unstarted tasks
     /// opening as 100% complete turned out to be caused by cleared presence
@@ -300,6 +303,8 @@ public enum MPP {
         case projectStart = 8
         case predecessor = 40
         case summary = 64
+        /// A manually scheduled task: its own dates decide.
+        case manual = 16
     }
 
     /// Calendar var-data entries.
@@ -735,6 +740,16 @@ public enum MPP {
             out.append(Array(data[off..<next]))
         }
         return out
+    }
+
+    /// Where a task's mode is in a file whose field map has no entry for
+    /// `TaskField.manuallyScheduled`: a bit of byte 8 of the task's Fixed2Meta
+    /// item, 0x08 in Project 2010's 92-byte items and 0x80 in Project 2013's
+    /// (where 2016 and later name it 1408). Project shows the task as manual
+    /// when it is set, whatever the file's new-task setting.
+    public static func taskModeMask(meta2Count: Int) -> UInt8? {
+        guard meta2Count > 8 else { return nil }
+        return meta2Count <= 92 ? 0x08 : 0x80
     }
 
     // MARK: - Meta bitmaps

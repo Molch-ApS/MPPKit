@@ -202,6 +202,13 @@ private struct Editor {
         MPP.setMetaBit(meta: &row.meta, meta2: &row.meta2, i, value: v)
     }
     func has(_ id: UInt32) -> Bool { fm[id] != nil }
+    /// Set a task's mode: field 1408, or in an older file the bit
+    /// `MPP.taskModeMask` names.
+    mutating func taskMode(manual: Bool) {
+        if bits[MPP.TaskField.manuallyScheduled] != nil { bit(MPP.TaskField.manuallyScheduled, manual); return }
+        guard let mask = MPP.taskModeMask(meta2Count: row.meta2.count) else { return }
+        if manual { row.meta2[8] |= mask } else { row.meta2[8] &= ~mask }
+    }
     /// Make the var-data presence bits say exactly which entries the record
     /// has: a bit cloned from the prototype for a field it no longer carries
     /// would have Project look for a value that is not there.
@@ -575,7 +582,7 @@ private final class Session {
                   guid: [UInt8], parentGUID: [UInt8], isSummary: Bool, position: Int,
                   task: MPPModel.ProjectTask?, percent: Int, work: Double,
                   baselines: [Int: Baseline], calendarUID: Int?, keepsWork: Bool = false,
-                  workPercent: Int? = nil) {
+                  workPercent: Int? = nil, keepsUnits: Bool = false) {
             var e = Editor(row: proto.row, fm: taskMap.fm, bits: taskMap.bits)
             let F = MPP.TaskField.self
             e.u32(F.uniqueID, UInt32(uid))
@@ -602,8 +609,14 @@ private final class Session {
             e.u16(F.fixedCostAccrual, MPP.accrualCodes[accrual] ?? 3)
             let units = task?.durationUnits ?? "d"
             let estimated = task?.estimated ?? false
-            let unitsWord = (isSummary ? MPP.summaryUnits : (MPP.unitLabels[units] ?? 7))
+            var unitsWord = (isSummary ? MPP.summaryUnits : (MPP.unitLabels[units] ?? 7))
                 | (estimated ? MPP.estimatedFlag : 0)
+            // A manual task keeps the units word its record holds (Project
+            // writes 0x15 there, as on summaries) while its units are unchanged.
+            if keepsUnits, let it = taskMap.fm[F.actualDurationUnits],
+               let word = BinaryReader(it.block == 0 ? e.row.rec : e.row.rec2).u16(at: it.offset) {
+                unitsWord = word
+            }
             e.u16(F.actualDurationUnits, unitsWord)
             for f in [F.start, F.earlyStart] { e.ts(f, start) }
             for f in [F.finish, F.earlyFinish] { e.ts(f, finish) }
@@ -620,12 +633,12 @@ private final class Session {
             e.bit(F.milestone, !isSummary && (tenths == 0 || task?.milestone == true))
             e.bit(F.estimated, estimated)
             let manual = task?.manual ?? false
-            e.bit(F.manuallyScheduled, manual)
+            e.taskMode(manual: manual)
             if manual {
                 e.ts(F.manualStart, start)
                 e.ts(F.manualFinish, finish)
                 e.i32(F.manualDuration, Int32(tenths))
-                e.u16(F.manualDurationUnits, MPP.unitLabels[units] ?? 7)
+                e.u16(F.manualDurationUnits, keepsUnits ? unitsWord : MPP.unitLabels[units] ?? 7)
             } else {
                 e.ts(F.manualStart, nil)
                 e.ts(F.manualFinish, nil)
@@ -691,7 +704,10 @@ private final class Session {
             } else if percent > 0 {
                 driver = D.actuals
                 (mark387, mark1255) = (start, start)
-            } else if constraint != nil || isMilestone || manual {
+            } else if manual {
+                driver = D.manual
+                (mark387, mark1255) = (start, start)
+            } else if constraint != nil || isMilestone {
                 driver = D.constraint
                 mark1255 = start
             } else if let produced = linkStart[uid], produced == start {
@@ -721,7 +737,7 @@ private final class Session {
                 if var flags = BinaryReader(src).u32(at: it.offset) {
                     flags &= ~UInt32(0x0002_B300)
                     flags |= 0x80
-                    if !isSummary { flags |= 0x2000 }
+                    if !isSummary && !manual { flags |= 0x2000 }
                     if constraint != nil || isMilestone { flags |= 0x300 }
                     if percent > 0 && !isSummary { flags |= 0x9000 }
                     if isMilestone { flags |= 0x2_0000 }
@@ -867,7 +883,9 @@ private final class Session {
                  parentGUID: parentGUID, isSummary: !(children[t.uid] ?? []).isEmpty, position: n + 2,
                  task: t, percent: pct[t.uid]!, work: workSum[t.uid]!, baselines: t.baselines,
                  calendarUID: calUID, keepsWork: ownRecord != nil && taskWorkKept.contains(t.uid),
-                 workPercent: workPct[t.uid])
+                 workPercent: workPct[t.uid],
+                 keepsUnits: ownRecord != nil && t.manual && source?.task(uid: t.uid).map {
+                     $0.manual && $0.durationUnits == t.durationUnits && $0.estimated == t.estimated } == true)
         }
         writeTable("TBkndTask", tasks, rows: taskRows, vars: taskVars, fieldClass: MPP.FieldClass.task)
 
