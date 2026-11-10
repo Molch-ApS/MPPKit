@@ -960,8 +960,9 @@ private final class Session {
                     extra.append((W.Rsc.baselineBudget[slot].cost, W.unsetDouble))
                 }
             }
-            let base = project.resourceCalendars.first { $0.resourceUID == res.uid && $0.uid == res.calendarUID }?.baseCalendarUID
-            let calUID = calendars.addResourceCalendar(resourceUID: res.uid, guid: res.guid, base: base)
+            let own = project.resourceCalendars.first { $0.resourceUID == res.uid && $0.uid == res.calendarUID }
+            let calUID = calendars.addResourceCalendar(resourceUID: res.uid, guid: res.guid, base: own?.baseCalendarUID,
+                                                       calendar: own)
             e.u32(RF.uniqueID, UInt32(res.uid))
             e.u32(RF.id, UInt32(n + 1))
             e.f64(RF.maxUnits, res.maxUnits * W.pctScale)
@@ -2193,7 +2194,7 @@ private struct CalendarBuild {
         // The Standard calendar's own definition.
         if let std = project.calendar,
            !(std.week.isEmpty && std.exceptions.isEmpty && table.payload(uid: stdUID, field: MPP.CalendarVar.data) == nil) {
-            setData(uid: stdUID, CalendarData.build(week: std.week, exceptions: std.exceptions))
+            define(uid: stdUID, week: std.week, exceptions: std.exceptions)
         }
         // Additional base calendars. A file saved over itself already has them:
         // each is matched by its uid, which is what tasks and resources refer
@@ -2212,7 +2213,7 @@ private struct CalendarBuild {
                 if !cal.name.isEmpty { uidByName[cal.name] = cal.uid }
                 if !(cal.week.isEmpty && cal.exceptions.isEmpty
                      && table.payload(uid: cal.uid, field: MPP.CalendarVar.data) == nil) {
-                    setData(uid: cal.uid, CalendarData.build(week: cal.week, exceptions: cal.exceptions))
+                    define(uid: cal.uid, week: cal.week, exceptions: cal.exceptions)
                 }
                 continue
             }
@@ -2224,7 +2225,7 @@ private struct CalendarBuild {
                 // Standard's definition is the project calendar's, set above.
                 if uid != stdUID, !(cal.week.isEmpty && cal.exceptions.isEmpty
                                     && table.payload(uid: uid, field: MPP.CalendarVar.data) == nil) {
-                    setData(uid: uid, CalendarData.build(week: cal.week, exceptions: cal.exceptions))
+                    define(uid: uid, week: cal.week, exceptions: cal.exceptions)
                 }
                 continue
             }
@@ -2256,6 +2257,17 @@ private struct CalendarBuild {
         patchMeta(uid: uid)
     }
 
+    /// A base calendar's definition: the file's own bytes while they say
+    /// the same, else a new blob.
+    mutating func define(uid: Int, week: [Int: [ClosedRange<Int>]?], exceptions: [CalendarException]) {
+        if let was = table.payload(uid: uid, field: MPP.CalendarVar.data),
+           vars.contains(where: { $0.uid == uid && $0.field == MPP.CalendarVar.data && $0.payload == was }) {
+            let read = CalendarData.parse(was)
+            if read.week == week && read.exceptions == exceptions { return }
+        }
+        setData(uid: uid, CalendarData.build(week: week, exceptions: exceptions))
+    }
+
     mutating func setData(uid: Int, _ blob: [UInt8]) {
         vars.removeAll { $0.uid == uid && $0.field == MPP.CalendarVar.data }
         vars.append((uid, MPP.CalendarVar.data, blob))
@@ -2276,7 +2288,10 @@ private struct CalendarBuild {
     /// A resource's own calendar row: (calendar uid, base, resource uid),
     /// GUIDs = the resource's twice, then the base's. The base is the one
     /// the resource had in the file while that calendar is kept, else Standard.
-    mutating func addResourceCalendar(resourceUID: Int, guid: [UInt8], base: Int? = nil) -> Int? {
+    /// Its own working times and exceptions come with it: as the file had
+    /// them, byte for byte, while unchanged.
+    mutating func addResourceCalendar(resourceUID: Int, guid: [UInt8], base: Int? = nil,
+                                      calendar: ProjectCalendar? = nil) -> Int? {
         guard var row = resourceProto, let cols = table.columns else { return nil }
         let uid = nextUID
         nextUID += 1
@@ -2294,6 +2309,27 @@ private struct CalendarBuild {
             row.rec2.replaceSubrange(32..<48, with: baseGUID.count == 16 ? baseGUID : standardGUID)
         }
         rows.append(row)
+        if let cal = calendar {
+            let read = table.rows.contains { !table.isBase($0) && table.uid(of: $0) == cal.uid
+                && table.resourceUID(of: $0) == resourceUID }
+            let name = read ? table.payload(uid: cal.uid, field: MPP.CalendarVar.name) : nil
+            var data = read ? table.payload(uid: cal.uid, field: MPP.CalendarVar.data) : nil
+            if let d = data {
+                let was = CalendarData.parse(d)
+                if was.week != cal.week || was.exceptions != cal.exceptions { data = nil }
+            }
+            if data == nil, !cal.week.isEmpty || !cal.exceptions.isEmpty {
+                data = CalendarData.build(week: cal.week, exceptions: cal.exceptions)
+            }
+            if let name { vars.append((uid, MPP.CalendarVar.name, name)) }
+            if let data { vars.append((uid, MPP.CalendarVar.data, data)) }
+            // A resource calendar's meta: byte 2 counts its var entries, and
+            // byte 9 bit 0 flags its definition blob (byte 8 is left as is).
+            if let i = rows.indices.last, rows[i].meta.count > 9 {
+                rows[i].meta[2] = UInt8(vars.filter { $0.uid == uid }.count)
+                rows[i].meta[9] = (rows[i].meta[9] & ~0x01) | (data != nil ? 0x01 : 0)
+            }
+        }
         return uid
     }
 
