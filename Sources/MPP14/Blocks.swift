@@ -48,6 +48,8 @@ public enum MPP {
         public static let currencySymbol: UInt32 = 37_748_752
         /// `0xFFFFFFFF` means "no status date".
         public static let statusDate: UInt32 = 37_748_805
+        /// "Split in-progress tasks": `u16`, 1 on and 0 off.
+        public static let splitInProgressTasks: UInt32 = 37_748_762
         public static let currencyCode: UInt32 = 37_753_787
         /// `u16` tenths of a minute after midnight.
         public static let defaultStartTime: UInt32 = 37_748_764
