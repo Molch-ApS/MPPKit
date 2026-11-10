@@ -158,6 +158,14 @@ public final class MPP14File {
             return (MPP.metaBit(meta: metas[i], meta2: meta2, idx) ?? 0) != 0
         }
 
+        /// Whether task row `i` is manually scheduled: field 1408 where the
+        /// field map has it, else the bit `MPP.taskModeMask` names.
+        func manuallyScheduled(_ i: Int) -> Bool {
+            if bitIndex[MPP.TaskField.manuallyScheduled] != nil { return flag(i, MPP.TaskField.manuallyScheduled) }
+            guard i < metas2.count, let mask = MPP.taskModeMask(meta2Count: metas2[i].count) else { return false }
+            return metas2[i][8] & mask != 0
+        }
+
         func varBytes(_ uid: Int, _ id: UInt32) -> [UInt8]? {
             guard let off = varTable[uid]?[id] else { return nil }
             return MPP.readVar(varData, offset: off)
@@ -543,7 +551,7 @@ public final class MPP14File {
             task.fixedCostAccrual = MPP.accrual(k.u16(i, MPP.TaskField.fixedCostAccrual))
             task.cost = (k.f64(i, MPP.TaskField.cost) ?? 0) / 100
             task.actualCost = (k.f64(i, MPP.TaskField.actualCost) ?? 0) / 100
-            task.manual = k.flag(i, MPP.TaskField.manuallyScheduled)
+            task.manual = k.manuallyScheduled(i)
             // A manual task's Start/Finish fields hold what the scheduler would
             // have computed; the dates Project shows are the manual pair.
             if task.manual, !task.summary,
@@ -551,6 +559,7 @@ public final class MPP14File {
                let mf = k.timestamp(i, MPP.TaskField.manualFinish) {
                 task.start = ms
                 task.finish = mf
+                if let md = k.i32(i, MPP.TaskField.manualDuration), md > 0 { task.durationDays = days(md) }
             }
             task.created = k.timestamp(i, MPP.TaskField.created)
             task.guid = k.bytes(i, MPP.TaskField.guid, count: 16) ?? []

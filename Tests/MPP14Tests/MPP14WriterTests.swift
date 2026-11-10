@@ -360,6 +360,8 @@ final class MPP14WriterTests: XCTestCase {
                 XCTAssertEqual(t.percentComplete, 0, label); XCTAssertNil(m387, label); XCTAssertEqual(m1255, t.start, label)
             case .projectStart?:
                 XCTAssertEqual(t.percentComplete, 0, label); XCTAssertEqual(m387, t.start, label); XCTAssertEqual(m1255, t.start, label)
+            case .manual?:
+                XCTAssertTrue(t.manual, label); XCTAssertEqual(m387, t.start, label); XCTAssertEqual(m1255, t.start, label)
             case .predecessor?:
                 XCTAssertEqual(t.percentComplete, 0, label); XCTAssertEqual(m387, m1255, label)
                 XCTAssertLessThanOrEqual(m387 ?? .distantFuture, t.start!, label)
