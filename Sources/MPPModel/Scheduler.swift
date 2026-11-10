@@ -356,16 +356,19 @@ public enum Scheduler {
 extension Project {
     /// Save the current schedule into baseline `slot` (0 is `Baseline`, 1...10
     /// are `Baseline1`...`Baseline10`, 11 and up the app's own), as Project's Set Baseline does: start,
-    /// finish, duration and work per task, summaries spanning their children
-    /// and work rolled up from assignments; assignments get the same snapshot
-    /// without a duration, and resources the work their assignments add up to.
+    /// finish, duration, work and cost per task, summaries spanning their
+    /// children and adding up their work and cost; assignments get the same
+    /// snapshot without a duration, and resources the work and cost their
+    /// assignments add up to.
     /// Gives every task without a baseline in `slot` one from its current
     /// dates, leaving the tasks that have one alone: the plan of a task is kept
     /// before tracking first moves it, never replaced.
-    public mutating func keepPlan(slot: Int = 0) {
+    ///
+    /// `was` is the plan as it was read, if any: see `setBaseline`.
+    public mutating func keepPlan(slot: Int = 0, keepingFrom was: Project? = nil) {
         guard tasks.contains(where: { $0.baselines[slot] == nil }) else { return }
         var snapshot = self
-        snapshot.setBaseline(slot: slot)
+        snapshot.setBaseline(slot: slot, keepingFrom: was)
         for i in tasks.indices where tasks[i].baselines[slot] == nil {
             tasks[i].baselines[slot] = snapshot.tasks[i].baselines[slot]
         }
@@ -374,35 +377,77 @@ extension Project {
         }
     }
 
-    public mutating func setBaseline(slot: Int = 0) {
+    /// Copies the schedule into baseline `slot`, as `keepPlan` describes, for
+    /// every task, assignment and resource.
+    ///
+    /// Work and cost are copied as they are. An assignment's work is the one
+    /// the file holds when `was` (the plan as it was read) shows nothing it
+    /// depends on has changed since, so a contour, overtime or a part-time
+    /// calendar is not lost; otherwise it is duration × units × hours per day,
+    /// as the writer saves it. Costs are those `recalculateCosts(keepingFrom:)`
+    /// gives.
+    public mutating func setBaseline(slot: Int = 0, keepingFrom was: Project? = nil) {
         precondition(slot >= 0, "baseline slot must be >= 0")
-        let hoursPerDay = Double(minutesPerDay) / 60
+        var costed = self
+        costed.recalculateCosts(keepingFrom: was)
+        let assigned = assignmentWorkHours(keepingFrom: was)
         var children: [Int: [Int]] = [:]
         for t in tasks { children[t.parentUID, default: []].append(t.uid) }
         var direct: [Int: Double] = [:]
-        for a in assignments {
-            guard let t = task(uid: a.taskUID) else { continue }
-            direct[a.taskUID, default: 0] += t.durationDays * hoursPerDay * a.units
+        for (i, a) in assignments.enumerated() where task(uid: a.taskUID) != nil {
+            direct[a.taskUID, default: 0] += assigned[i]
         }
         func work(_ uid: Int) -> Double {
             (direct[uid] ?? 0) + (children[uid] ?? []).reduce(0) { $0 + work($1) }
         }
+        func rounded(_ hours: Double) -> Double { (hours * 10_000).rounded() / 10_000 }
         for i in tasks.indices {
             let t = tasks[i]
             tasks[i].baselines[slot] = Baseline(start: t.start, finish: t.finish,
                                                 durationDays: t.durationDays,
-                                                workHours: (work(t.uid) * 10_000).rounded() / 10_000)
+                                                workHours: rounded(work(t.uid)),
+                                                cost: costed.tasks[i].cost)
         }
-        var perResource: [Int: Double] = [:]
+        var perResource: [Int: (work: Double, cost: Double)] = [:]
         for i in assignments.indices {
             guard let t = task(uid: assignments[i].taskUID) else { continue }
-            let hours = (t.durationDays * hoursPerDay * assignments[i].units * 10_000).rounded() / 10_000
-            assignments[i].baselines[slot] = Baseline(start: t.start, finish: t.finish, workHours: hours)
-            perResource[assignments[i].resourceUID, default: 0] += hours
+            let hours = rounded(assigned[i])
+            let cost = costed.assignments[i].cost
+            assignments[i].baselines[slot] = Baseline(start: t.start, finish: t.finish, workHours: hours, cost: cost)
+            let sum = perResource[assignments[i].resourceUID] ?? (0, 0)
+            perResource[assignments[i].resourceUID] = (sum.work + hours, sum.cost + cost)
         }
         for i in resources.indices {
-            resources[i].baselines[slot] = Baseline(workHours: perResource[resources[i].uid] ?? 0)
+            let sum = perResource[resources[i].uid] ?? (0, 0)
+            resources[i].baselines[slot] = Baseline(workHours: sum.work, cost: sum.cost)
         }
+    }
+
+    /// Each assignment's work in hours, in `assignments` order: what the file
+    /// holds when the plan as it was read (`was`) has the same assignment with
+    /// the same units, on a task with the same dates, duration, splits,
+    /// calendar and progress; otherwise the task's duration × units × hours
+    /// per day. Project keeps an assignment's work as it is until one of
+    /// these changes, and a contoured, part-time or overtime assignment does
+    /// not hold duration × units of it.
+    public func assignmentWorkHours(keepingFrom was: Project? = nil) -> [Double] {
+        let hoursPerDay = Double(minutesPerDay) / 60
+        let byUID = Dictionary(tasks.map { ($0.uid, $0) }, uniquingKeysWith: { a, _ in a })
+        return assignments.map { a in
+            guard let t = byUID[a.taskUID] else { return 0 }
+            if let was, was.minutesPerDay == minutesPerDay, Self.sameWorkInputs(a, t, in: was) { return a.workHours }
+            return t.durationDays * hoursPerDay * a.units
+        }
+    }
+
+    static func sameWorkInputs(_ a: Assignment, _ t: ProjectTask, in was: Project) -> Bool {
+        guard let wt = was.task(uid: t.uid),
+              let wa = was.assignments.first(where: { $0.taskUID == a.taskUID && $0.resourceUID == a.resourceUID })
+        else { return false }
+        return wt.start == t.start && wt.finish == t.finish && wt.durationDays == t.durationDays
+            && wt.durationUnits == t.durationUnits && wt.percentComplete == t.percentComplete
+            && wt.splits == t.splits && wt.calendar == t.calendar
+            && wa.units == a.units && wa.workHours == a.workHours
     }
 
     /// Drop baseline `slot` everywhere.

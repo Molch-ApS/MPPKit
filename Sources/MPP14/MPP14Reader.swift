@@ -801,7 +801,7 @@ public final class MPP14File {
             }
             if let cost = k.varBytes(uid, Self.taskBaselineCost[slot]), cost.count >= 8,
                let c = BinaryReader(cost).f64(at: 0) {
-                b.cost = c
+                b.cost = c / 100
             }
             // A cleared slot rather than a saved one.
             if b.start == nil && b.finish == nil && b.durationDays == 0 && b.workHours == 0 {
@@ -822,7 +822,7 @@ public final class MPP14File {
             let work = double(k.varBytes(uid, resourceBaselineWork[slot]))
             let cost = double(k.varBytes(uid, resourceBaselineCost[slot]))
             if (work ?? 0) == 0 && (cost ?? 0) == 0 { continue }
-            out[slot] = Baseline(workHours: hours(work), cost: cost ?? 0)
+            out[slot] = Baseline(workHours: hours(work), cost: (cost ?? 0) / 100)
         }
         return out
     }
@@ -837,7 +837,7 @@ public final class MPP14File {
             if let startRaw { b.start = MPP.decodeTimestamp(startRaw, offset: 0) }
             if let finishRaw { b.finish = MPP.decodeTimestamp(finishRaw, offset: 0) }
             b.workHours = hours(double(k.varBytes(uid, assignmentBaselineWork[slot])))
-            b.cost = double(k.varBytes(uid, assignmentBaselineCost[slot])) ?? 0
+            b.cost = (double(k.varBytes(uid, assignmentBaselineCost[slot])) ?? 0) / 100
             if b.start == nil && b.finish == nil && b.workHours == 0 { continue }
             out[slot] = b
         }

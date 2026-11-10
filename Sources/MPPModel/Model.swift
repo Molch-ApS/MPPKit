@@ -121,7 +121,7 @@ public struct Baseline: Equatable, Sendable {
     public var finish: Date?
     public var durationDays: Double = 0
     public var workHours: Double = 0
-    /// In the file's own cost units; the scale is not established.
+    /// In currency units, as `ProjectTask.cost`; the file holds hundredths.
     public var cost: Double = 0
 
     public init(start: Date? = nil, finish: Date? = nil, durationDays: Double = 0,

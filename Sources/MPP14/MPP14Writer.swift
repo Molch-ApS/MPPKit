@@ -693,7 +693,7 @@ private final class Session {
                 extra.append((MPP14File.taskBaselineUnits[slot],
                               le(isSummary ? MPP.summaryUnits : (MPP.unitLabels[units] ?? 7))))
                 extra.append((MPP14File.taskBaselineWork[slot], le(b.workHours * 600 * W.workScale)))
-                extra.append((MPP14File.taskBaselineCost[slot], le(b.cost)))
+                extra.append((MPP14File.taskBaselineCost[slot], le(b.cost * 100)))
                 if slot < W.TaskIDs.baselineExtras.count {
                     let x = W.TaskIDs.baselineExtras[slot]
                     extra.append((x.ds, MPP.encodeTimestamp(nil)))
@@ -887,7 +887,7 @@ private final class Session {
             }
             for (slot, b) in res.baselines.projectSlots.sorted(by: { $0.key < $1.key }) {
                 extra.append((MPP14File.resourceBaselineWork[slot], le(b.workHours * 600 * W.workScale)))
-                extra.append((MPP14File.resourceBaselineCost[slot], le(b.cost)))
+                extra.append((MPP14File.resourceBaselineCost[slot], le(b.cost * 100)))
                 if slot < W.Rsc.baselineBudget.count {
                     extra.append((W.Rsc.baselineBudget[slot].work, W.unsetDouble))
                     extra.append((W.Rsc.baselineBudget[slot].cost, W.unsetDouble))
@@ -1484,7 +1484,7 @@ private final class Session {
                     (MPP14File.assignmentBaselineStart[slot], MPP.encodeTimestamp(b.start)),
                     (MPP14File.assignmentBaselineFinish[slot], MPP.encodeTimestamp(b.finish)),
                     (MPP14File.assignmentBaselineWork[slot], le(b.workHours * 600 * W.workScale)),
-                    (MPP14File.assignmentBaselineCost[slot], le(b.cost)),
+                    (MPP14File.assignmentBaselineCost[slot], le(b.cost * 100)),
                 ]
                 if slot < W.Assn.baselineBudget.count {
                     entries.append((W.Assn.baselineBudget[slot].work, W.unsetDouble))
