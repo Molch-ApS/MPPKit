@@ -900,7 +900,8 @@ private final class Session {
                     extra.append((W.Rsc.baselineBudget[slot].cost, W.unsetDouble))
                 }
             }
-            let calUID = calendars.addResourceCalendar(resourceUID: res.uid, guid: res.guid)
+            let base = project.resourceCalendars.first { $0.resourceUID == res.uid && $0.uid == res.calendarUID }?.baseCalendarUID
+            let calUID = calendars.addResourceCalendar(resourceUID: res.uid, guid: res.guid, base: base)
             e.u32(RF.uniqueID, UInt32(res.uid))
             e.u32(RF.id, UInt32(n + 1))
             e.f64(RF.maxUnits, res.maxUnits * W.pctScale)
@@ -2042,8 +2043,10 @@ private struct CalendarBuild {
         self.table = table
         guard let cols = table.columns else { throw MPPError.template("calendar table has no base calendar") }
 
-        // The Standard calendar: the template's project calendar if it is
-        // called that, else the first base calendar named Standard.
+        // The project calendar ("Standard" here, whatever its name): the row
+        // it was read from, else the template's base calendar named Standard,
+        // else the one the file names as the project's. Another calendar
+        // called Standard keeps its own row.
         let defaultName = session.props.text(MPP.PropsKey.defaultCalendarName) ?? "Standard"
         var baseNames: [Int: String] = [:]
         for row in table.rows where table.isBase(row) {
@@ -2051,7 +2054,9 @@ private struct CalendarBuild {
                 baseNames[uid] = table.payload(uid: uid, field: MPP.CalendarVar.name).map(MPP.decodeUnicode) ?? ""
             }
         }
-        guard let stdUID = baseNames.first(where: { $0.value == "Standard" })?.key
+        let readUID = project.calendar.map(\.uid).flatMap { $0 != 0 && baseNames[$0] != nil ? $0 : nil }
+        guard let stdUID = readUID
+                ?? baseNames.first(where: { $0.value == "Standard" })?.key
                 ?? baseNames.first(where: { $0.value == defaultName })?.key
                 ?? baseNames.keys.min() else {
             throw MPPError.template("no Standard calendar")
@@ -2083,7 +2088,7 @@ private struct CalendarBuild {
         self.resourceProto = resourceProto
         standardUID = stdUID
         for (uid, name) in baseNames where !name.isEmpty && keptUIDs.contains(uid) { uidByName[name] = uid }
-        uidByName["Standard"] = stdUID
+        if uidByName["Standard"] == nil { uidByName["Standard"] = stdUID }
         let stdRow = kept.first { table.uid(of: $0) == stdUID }
         standardGUID = Array((stdRow?.rec2 ?? []).prefix(16))
         baseProto = stdRow
@@ -2177,21 +2182,25 @@ private struct CalendarBuild {
         rows[i].meta[8] = (rows[i].meta[8] & ~0xC0) | (hasData ? 0xC0 : 0)
     }
 
-    /// A resource's own calendar row: (calendar uid, base = Standard, resource
-    /// uid), GUIDs = the resource's twice, then Standard's.
-    mutating func addResourceCalendar(resourceUID: Int, guid: [UInt8]) -> Int? {
+    /// A resource's own calendar row: (calendar uid, base, resource uid),
+    /// GUIDs = the resource's twice, then the base's. The base is the one
+    /// the resource had in the file while that calendar is kept, else Standard.
+    mutating func addResourceCalendar(resourceUID: Int, guid: [UInt8], base: Int? = nil) -> Int? {
         guard var row = resourceProto, let cols = table.columns else { return nil }
         let uid = nextUID
         nextUID += 1
         var rec = row.rec
         rec.replaceSubrange(cols.uid * 4..<cols.uid * 4 + 4, with: le(Int32(uid)))
-        rec.replaceSubrange(cols.base * 4..<cols.base * 4 + 4, with: le(Int32(standardUID)))
+        let baseRow = base.flatMap { b in rows.first { table.isBase($0) && table.uid(of: $0) == b } }
+        let baseUID = baseRow.flatMap(table.uid(of:)) ?? standardUID
+        rec.replaceSubrange(cols.base * 4..<cols.base * 4 + 4, with: le(Int32(baseUID)))
         rec.replaceSubrange(cols.resource * 4..<cols.resource * 4 + 4, with: le(Int32(resourceUID)))
         row.rec = rec
         if row.rec2.count >= 48 {
             row.rec2.replaceSubrange(0..<16, with: guid)
             row.rec2.replaceSubrange(16..<32, with: guid)
-            row.rec2.replaceSubrange(32..<48, with: standardGUID)
+            let baseGUID = baseRow.map { Array($0.rec2.prefix(16)) } ?? standardGUID
+            row.rec2.replaceSubrange(32..<48, with: baseGUID.count == 16 ? baseGUID : standardGUID)
         }
         rows.append(row)
         return uid
