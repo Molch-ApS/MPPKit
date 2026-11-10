@@ -216,20 +216,23 @@ extension Project {
 
     /// Save the schedule as it is now into a new slot (`nextBaselineSlot`),
     /// never over an existing one. Returns the slot. `now` is wall-clock
-    /// time, like every date in the model.
+    /// time, like every date in the model. `was` is the plan as it was read,
+    /// if any (see `setBaseline`).
     @discardableResult
-    public mutating func saveNewBaseline(name: String? = nil, now: Date, by: String? = nil) -> Int {
+    public mutating func saveNewBaseline(name: String? = nil, now: Date, by: String? = nil,
+                                         keepingFrom was: Project? = nil) -> Int {
         let slot = nextBaselineSlot
-        setBaseline(slot: slot)
+        setBaseline(slot: slot, keepingFrom: was)
         baselineInfo[slot] = BaselineInfo(name: Self.clean(name), saved: now, savedBy: Self.clean(by))
         return slot
     }
 
     /// Replace a baseline's dates with the schedule as it is now. The name
     /// and lock stay; the saved date and saver become now's.
-    public mutating func updateBaseline(slot: Int, now: Date, by: String? = nil) throws {
+    public mutating func updateBaseline(slot: Int, now: Date, by: String? = nil,
+                                        keepingFrom was: Project? = nil) throws {
         try unlocked(slot)
-        setBaseline(slot: slot)
+        setBaseline(slot: slot, keepingFrom: was)
         var info = baselineInfo[slot] ?? BaselineInfo()
         info.saved = now
         info.savedBy = Self.clean(by)

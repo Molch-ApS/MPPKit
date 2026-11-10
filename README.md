@@ -151,7 +151,11 @@ Cost1–10, Duration1–10, Start/Finish1–10, enterprise fields, resource
 availability and assignment custom fields are saved as they were, as are
 custom-field definitions (value lists, formulas, indicators). Fields MPPKit
 writes keep Project's bytes while unchanged: notes stay RTF, value-list
-entries stay linked, baselines keep their timephased data. A split task's
+entries stay linked, baselines keep their timephased data, and an
+assignment keeps its work, its own dates and its timephased work (a
+contour, overtime, a part-time calendar) until its units or its task's
+dates, duration or progress change. `RoundTripTests` saves every file in
+the corpus over itself and reads it back. A split task's
 timephased work is kept until its dates, work or progress change; then its
 work is laid out again around the same gaps (a task with progress is written
 in one piece). `KeepTests` and `SplitTaskTests` check this on files Project
