@@ -2103,7 +2103,7 @@ private struct CalendarBuild {
         // The Standard calendar's own definition.
         if let std = project.calendar,
            !(std.week.isEmpty && std.exceptions.isEmpty && table.payload(uid: stdUID, field: MPP.CalendarVar.data) == nil) {
-            setData(uid: stdUID, CalendarData.build(week: std.week, exceptions: std.exceptions))
+            define(uid: stdUID, week: std.week, exceptions: std.exceptions)
         }
         // Additional base calendars. A file saved over itself already has them:
         // each is matched by its uid, which is what tasks and resources refer
@@ -2122,7 +2122,7 @@ private struct CalendarBuild {
                 if !cal.name.isEmpty { uidByName[cal.name] = cal.uid }
                 if !(cal.week.isEmpty && cal.exceptions.isEmpty
                      && table.payload(uid: cal.uid, field: MPP.CalendarVar.data) == nil) {
-                    setData(uid: cal.uid, CalendarData.build(week: cal.week, exceptions: cal.exceptions))
+                    define(uid: cal.uid, week: cal.week, exceptions: cal.exceptions)
                 }
                 continue
             }
@@ -2134,7 +2134,7 @@ private struct CalendarBuild {
                 // Standard's definition is the project calendar's, set above.
                 if uid != stdUID, !(cal.week.isEmpty && cal.exceptions.isEmpty
                                     && table.payload(uid: uid, field: MPP.CalendarVar.data) == nil) {
-                    setData(uid: uid, CalendarData.build(week: cal.week, exceptions: cal.exceptions))
+                    define(uid: uid, week: cal.week, exceptions: cal.exceptions)
                 }
                 continue
             }
@@ -2164,6 +2164,17 @@ private struct CalendarBuild {
         vars.removeAll { $0.uid == uid && $0.field == MPP.CalendarVar.name }
         vars.append((uid, MPP.CalendarVar.name, MPP.encodeUnicode(name)))
         patchMeta(uid: uid)
+    }
+
+    /// A base calendar's definition: the file's own bytes while they say
+    /// the same, else a new blob.
+    mutating func define(uid: Int, week: [Int: [ClosedRange<Int>]?], exceptions: [CalendarException]) {
+        if let was = table.payload(uid: uid, field: MPP.CalendarVar.data),
+           vars.contains(where: { $0.uid == uid && $0.field == MPP.CalendarVar.data && $0.payload == was }) {
+            let read = CalendarData.parse(was)
+            if read.week == week && read.exceptions == exceptions { return }
+        }
+        setData(uid: uid, CalendarData.build(week: week, exceptions: exceptions))
     }
 
     mutating func setData(uid: Int, _ blob: [UInt8]) {
