@@ -455,18 +455,6 @@ private final class Session {
             }
         }
 
-        // Work in milli-minutes per task, rolled up into summaries.
-        var directWork: [Int: Double] = [:]
-        for a in project.assignments {
-            directWork[a.taskUID, default: 0] += Double(eff[a.taskUID]!.tenths) * W.workScale * a.units
-        }
-        var workSum: [Int: Double] = [:]
-        for t in deepestFirst {
-            var sum = directWork[t.uid] ?? 0
-            for kid in children[t.uid] ?? [] { sum += workSum[kid] ?? 0 }
-            workSum[t.uid] = sum
-        }
-
         // Percent complete, summaries weighted by duration.
         var pct: [Int: Int] = [:]
         func weighted(_ uids: [Int]) -> Int {
@@ -487,6 +475,48 @@ private final class Session {
         }
         let top = project.tasks.filter { $0.parentUID == 0 }
         let pct0 = weighted(top.map(\.uid))
+
+        // Work in milli-minutes per assignment: what the file holds while
+        // nothing it depends on has changed (a contour, overtime or a part-time
+        // calendar make it other than duration × units), else duration × units.
+        // Rolled up per task and into summaries.
+        let assignmentWork = project.assignmentWorkHours(keepingFrom: source).map { $0 * 600 * W.workScale }
+        var keptWork = project.keepsAssignmentWork(keepingFrom: source)
+        // Kept only with the timephased work Project laid out for it: an
+        // assignment whose own record no longer has its dates, work, units
+        // and progress is laid out afresh in one flat piece, which holds
+        // duration × units.
+        if keptWork.contains(true) {
+            let own = ownAssignmentRows(try assignmentTable(), project, byUID: byUID)
+            for i in keptWork.indices where keptWork[i] {
+                let a = project.assignments[i]
+                guard let row = own["\(a.taskUID)/\(a.resourceUID)"], let e = eff[a.taskUID] else {
+                    keptWork[i] = false
+                    continue
+                }
+                // Its own dates, which a resource calendar or a delay can set
+                // apart from the task's; its progress is the task's, unchanged.
+                keptWork[i] = Self.sameSchedule(row, start: a.start ?? e.start, finish: a.finish ?? e.finish,
+                                                work: assignmentWork[i], units: a.units * W.pctScale,
+                                                percent: nil, fm: assnMap.fm)
+            }
+        }
+        var directWork: [Int: Double] = [:]
+        for (i, a) in project.assignments.enumerated() {
+            directWork[a.taskUID, default: 0] += keptWork[i] ? assignmentWork[i]
+                : Double(eff[a.taskUID]!.tenths) * W.workScale * a.units
+        }
+        // A task whose every assignment keeps its work keeps the work fields
+        // of its own record, as Project saved them.
+        var taskWorkKept: Set<Int> = []
+        for (i, a) in project.assignments.enumerated() where keptWork[i] { taskWorkKept.insert(a.taskUID) }
+        for (i, a) in project.assignments.enumerated() where !keptWork[i] { taskWorkKept.remove(a.taskUID) }
+        var workSum: [Int: Double] = [:]
+        for t in deepestFirst {
+            var sum = directWork[t.uid] ?? 0
+            for kid in children[t.uid] ?? [] { sum += workSum[kid] ?? 0 }
+            workSum[t.uid] = sum
+        }
 
         let pStart = project.tasks.map { eff[$0.uid]!.start }.min() ?? project.start
         let pFinish = project.tasks.map { eff[$0.uid]!.finish }.max() ?? project.start
@@ -513,7 +543,7 @@ private final class Session {
                   start: Date, finish: Date, tenths: Int, level: Int, parentUID: Int,
                   guid: [UInt8], parentGUID: [UInt8], isSummary: Bool, position: Int,
                   task: MPPModel.ProjectTask?, percent: Int, work: Double,
-                  baselines: [Int: Baseline], calendarUID: Int?) {
+                  baselines: [Int: Baseline], calendarUID: Int?, keepsWork: Bool = false) {
             var e = Editor(row: proto.row, fm: taskMap.fm, bits: taskMap.bits)
             let F = MPP.TaskField.self
             e.u32(F.uniqueID, UInt32(uid))
@@ -522,8 +552,10 @@ private final class Session {
             e.u32(F.parentUID, UInt32(parentUID))
             e.i32(F.duration, Int32(tenths))
             e.i32(F.remainingDuration, Int32(tenths))
-            e.f64(F.work, work)
-            e.f64(F.remainingWork, work)
+            if !keepsWork {
+                e.f64(F.work, work)
+                e.f64(F.remainingWork, work)
+            }
             // Costs, in hundredths: the project summary row adds up the top.
             let cost = task?.cost ?? project.totalCost.cost
             let actualCost = task?.actualCost ?? project.totalCost.actual
@@ -592,8 +624,10 @@ private final class Session {
             e.u16(F.percentWorkComplete, UInt16(percent))
             e.i32(F.actualDuration, Int32(actualTenths))
             e.i32(F.remainingDuration, Int32(tenths - actualTenths))
-            e.f64(F.actualWork, work * Double(percent) / 100)
-            e.f64(F.remainingWork, work * Double(100 - percent) / 100)
+            if !keepsWork {
+                e.f64(F.actualWork, work * Double(percent) / 100)
+                e.f64(F.remainingWork, work * Double(100 - percent) / 100)
+            }
             if percent > 0 {
                 e.ts(F.actualStart, start)
                 let point = percent == 100 ? finish : time.advance(start, minutes: actualTenths / 10)
@@ -794,7 +828,7 @@ private final class Session {
                  tenths: e.tenths, level: t.outlineLevel, parentUID: t.parentUID, guid: t.guid,
                  parentGUID: parentGUID, isSummary: !(children[t.uid] ?? []).isEmpty, position: n + 2,
                  task: t, percent: pct[t.uid]!, work: workSum[t.uid]!, baselines: t.baselines,
-                 calendarUID: calUID)
+                 calendarUID: calUID, keepsWork: ownRecord != nil && taskWorkKept.contains(t.uid))
         }
         writeTable("TBkndTask", tasks, rows: taskRows, vars: taskVars, fieldClass: MPP.FieldClass.task)
 
@@ -956,7 +990,7 @@ private final class Session {
 
         // ---- assignments ----------------------------------------------------------
         try writeAssignments(project, eff: eff, pct: pct, children: children, byUID: byUID,
-                             time: time, now: now)
+                             time: time, now: now, keptWork: keptWork, assignmentWork: assignmentWork)
 
         writeFieldAliases(project)
         writeEntryTable(project)
@@ -1283,10 +1317,36 @@ private final class Session {
 
     // MARK: Assignments
 
+    func assignmentTable() throws -> Table {
+        try table("TBkndAssn", metaSize: MPP.assignmentMetaSize, meta2Size: 53)
+    }
+
+    /// The assignment records read from this file that are still in the
+    /// project, by "task uid/resource uid": same task and resource, both
+    /// with the GUIDs the file had.
+    func ownAssignmentRows(_ t: Table, _ project: Project,
+                           byUID: [Int: MPPModel.ProjectTask]) -> [String: Row] {
+        let A = MPP.AssignmentField.self
+        var own: [String: Row] = [:]
+        guard let tg = assnMap.fm[A.taskGUID], let rg = assnMap.fm[A.resourceGUID],
+              let tIt = assnMap.fm[A.taskUniqueID], let rIt = assnMap.fm[A.resourceUniqueID] else { return own }
+        let rscByUID = Dictionary(project.resources.map { ($0.uid, $0.guid) }, uniquingKeysWith: { a, _ in a })
+        for row in t.rows where row.rec.count > 50 {
+            guard let uid = BinaryReader(tIt.block == 0 ? row.rec : row.rec2).u32(at: tIt.offset), uid != 0,
+                  let task = byUID[Int(uid)], task.guid.count == 16,
+                  Self.bytes(row, tg, count: 16) == task.guid,
+                  let r = Self.bytes(row, rIt, count: 4).map({ BinaryReader($0).i32(at: 0) ?? 0 }) else { continue }
+            let rGUID = r == W.nullResourceUID ? W.nullResourceGUID : rscByUID[Int(r)]
+            guard let rGUID, Self.bytes(row, rg, count: 16) == rGUID else { continue }
+            own["\(task.uid)/\(r)"] = row
+        }
+        return own
+    }
+
     func writeAssignments(_ project: Project, eff: [Int: (start: Date, finish: Date, tenths: Int)],
                           pct: [Int: Int], children: [Int: [Int]], byUID: [Int: MPPModel.ProjectTask],
-                          time: WorkingTime, now: Date) throws {
-        let t = try table("TBkndAssn", metaSize: MPP.assignmentMetaSize, meta2Size: 53)
+                          time: WorkingTime, now: Date, keptWork: [Bool], assignmentWork: [Double]) throws {
+        let t = try assignmentTable()
         let A = MPP.AssignmentField.self
         func taskUID(_ row: Row) -> UInt32? {
             guard let it = assnMap.fm[A.taskUniqueID] else { return nil }
@@ -1346,19 +1406,7 @@ private final class Session {
         // are kept. It matches on its task and resource, both still the ones
         // the file had (same GUIDs).
         let ownedVars = data.union([A.created, W.Assn.plannedWorkData])
-        var own: [String: Row] = [:]
-        if let tg = assnMap.fm[A.taskGUID], let rg = assnMap.fm[A.resourceGUID] {
-            let rscByUID = Dictionary(project.resources.map { ($0.uid, $0.guid) }, uniquingKeysWith: { a, _ in a })
-            for row in real {
-                guard let task = taskUID(row).flatMap({ byUID[Int($0)] }), task.guid.count == 16,
-                      Self.bytes(row, tg, count: 16) == task.guid,
-                      let rIt = assnMap.fm[A.resourceUniqueID],
-                      let r = Self.bytes(row, rIt, count: 4).map({ BinaryReader($0).i32(at: 0) ?? 0 }) else { continue }
-                let rGUID = r == W.nullResourceUID ? W.nullResourceGUID : rscByUID[Int(r)]
-                guard let rGUID, Self.bytes(row, rg, count: 16) == rGUID else { continue }
-                own["\(task.uid)/\(r)"] = row
-            }
-        }
+        let own = ownAssignmentRows(t, project, byUID: byUID)
 
         let rscByUID = Dictionary(uniqueKeysWithValues: project.resources.map { ($0.uid, $0) })
         let assigned = Set(project.assignments.map(\.taskUID))
@@ -1379,6 +1427,12 @@ private final class Session {
             let task = byUID[spec.task]!
             let (start, finish, tenths) = eff[spec.task]!
             let ownRow = own["\(spec.task)/\(spec.resource)"]
+            // The work the file holds, kept with the fields that follow from
+            // it (regular, actual and remaining work, % work complete) and its
+            // timephased work while nothing it depends on has changed. The
+            // first specs are the project's assignments, in order.
+            let keepsWork = ownRow != nil && n < keptWork.count && keptWork[n]
+            let work = keepsWork ? assignmentWork[n] : Double(tenths) * W.workScale * spec.units
             var e = protoEditor
             // Its own var fields, less those written below; the prototype's
             // planned-work contour is what gets patched.
@@ -1388,15 +1442,17 @@ private final class Session {
             var keptContour: [(field: UInt32, payload: [UInt8])]?
             if let ownRow {
                 e = Editor(row: ownRow, fm: assnMap.fm, bits: assnMap.bits)
-                for f in [A.actualStart, A.actualFinish] {
-                    if let b = assnMap.bits[f] { MPP.setMetaBit(meta: &e.row.meta, meta2: &e.row.meta2, b, value: false) }
+                if !keepsWork {
+                    for f in [A.actualStart, A.actualFinish] {
+                        if let b = assnMap.bits[f] { MPP.setMetaBit(meta: &e.row.meta, meta2: &e.row.meta2, b, value: false) }
+                    }
                 }
                 let ownVars = t.vars(of: ownUID(ownRow))
                 baseVars = protoVars.filter { $0.field == W.Assn.plannedWorkData }
                     + ownVars.filter { !ownedVars.contains($0.field) || $0.field == A.created }
-                if Self.sameSchedule(ownRow, start: start, finish: finish,
-                                     work: Double(tenths) * W.workScale * spec.units,
-                                     units: spec.units * W.pctScale, percent: pct[spec.task] ?? 0, fm: assnMap.fm) {
+                if keepsWork || Self.sameSchedule(ownRow, start: start, finish: finish, work: work,
+                                                  units: spec.units * W.pctScale, percent: pct[spec.task] ?? 0,
+                                                  fm: assnMap.fm) {
                     keptContour = ownVars.filter {
                         [W.Assn.plannedWorkData, W.Assn.actualWorkData, W.Assn.actualIrregularData].contains($0.field)
                     }
@@ -1407,40 +1463,49 @@ private final class Session {
             e.u32(A.taskUniqueID, UInt32(spec.task))
             e.i32(A.resourceUniqueID, spec.resource)
             e.f64(A.units, spec.units * W.pctScale)
-            let work = Double(tenths) * W.workScale * spec.units
-            for f in [A.work, A.regularWork, A.remainingWork] { e.f64(f, work) }
+            if !keepsWork {
+                for f in [A.work, A.regularWork, A.remainingWork] { e.f64(f, work) }
+            }
             e.f64(A.cost, spec.cost * 100)
             e.f64(A.actualCost, spec.actualCost * 100)
             e.f64(A.remainingCost, (spec.cost - spec.actualCost) * 100)
             e.u16(A.costRateTable, UInt16(spec.table))
-            e.f64(A.actualWork, 0)
-            e.u16(A.percentWorkComplete, 0)
-            e.ts(A.actualStart, nil)
-            e.ts(A.actualFinish, nil)
+            if !keepsWork {
+                e.f64(A.actualWork, 0)
+                e.u16(A.percentWorkComplete, 0)
+                e.ts(A.actualStart, nil)
+                e.ts(A.actualFinish, nil)
+            }
 
             let p = pct[spec.task] ?? 0
             var reached = start, remainingWork = work, remainingTenths = tenths
             if p > 0 {
-                e.f64(A.actualWork, work * Double(p) / 100)
                 remainingWork = work * Double(100 - p) / 100
-                e.f64(A.remainingWork, remainingWork)
+                if !keepsWork {
+                    e.f64(A.actualWork, work * Double(p) / 100)
+                    e.f64(A.remainingWork, remainingWork)
+                    e.u16(A.percentWorkComplete, UInt16(p))
+                }
                 let elapsed = Int((Double(tenths) * Double(p) / 100).rounded())
                 remainingTenths = tenths - elapsed
                 reached = p == 100 ? finish : time.advance(start, minutes: elapsed / 10)
-                e.u16(A.percentWorkComplete, UInt16(p))
-                e.ts(A.actualStart, start)
-                e.bit(A.actualStart, true)
-                if p == 100 {
-                    e.ts(A.actualFinish, finish)
-                    e.bit(A.actualFinish, true)
+                if !keepsWork {
+                    e.ts(A.actualStart, start)
+                    e.bit(A.actualStart, true)
+                    if p == 100 {
+                        e.ts(A.actualFinish, finish)
+                        e.bit(A.actualFinish, true)
+                    }
                 }
             }
             e.bit(A.started, p > 0)
             e.bit(A.finished, p == 100)
-            e.ts(A.start, start)
-            e.ts(A.resume, reached)
-            e.ts(A.stop, reached)
-            e.ts(A.finish, finish)
+            if !keepsWork {
+                e.ts(A.start, start)
+                e.ts(A.resume, reached)
+                e.ts(A.stop, reached)
+                e.ts(A.finish, finish)
+            }
             e.put(A.guid, ownRow.flatMap { Self.bytes($0, assnMap.fm[A.guid], count: 16) } ?? options.newGUID())
             e.put(A.taskGUID, task.guid)
             e.put(A.resourceGUID, empty ? W.nullResourceGUID : rscByUID[Int(spec.resource)]!.guid)
@@ -1530,9 +1595,9 @@ private final class Session {
 
     /// Whether an assignment's own record already has the dates, work, units
     /// and progress it is about to be written with, so its timephased work
-    /// still describes it.
+    /// still describes it. A nil `percent` leaves progress out.
     static func sameSchedule(_ row: Row, start: Date, finish: Date, work: Double, units: Double,
-                             percent: Int, fm: [UInt32: MPP.FieldItem]) -> Bool {
+                             percent: Int?, fm: [UInt32: MPP.FieldItem]) -> Bool {
         let A = MPP.AssignmentField.self
         func ts(_ id: UInt32) -> Date? {
             bytes(row, fm[id], count: 4).flatMap { MPP.decodeTimestamp($0, offset: 0) }
@@ -1542,7 +1607,7 @@ private final class Session {
         let pct = bytes(row, fm[A.percentWorkComplete], count: 2).flatMap { BinaryReader($0).u16(at: 0) }
         guard let w = f64(A.work), let u = f64(A.units) else { return false }
         return ts(A.start) == start && ts(A.finish) == finish && abs(w - work) < 0.5
-            && abs(u - units) < 0.5 && Int(pct ?? 0) == percent
+            && abs(u - units) < 0.5 && (percent == nil || Int(pct ?? 0) == percent)
     }
 
     /// Var 50: the work done so far, in the single-segment shape Project writes.
