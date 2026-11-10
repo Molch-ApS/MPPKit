@@ -773,7 +773,14 @@ private final class Session {
             let e = eff[t.uid]!
             let parentGUID = t.parentUID == 0 ? summaryGUID : byUID[t.parentUID]!.guid
             var calUID: Int?
-            if let name = t.calendar {
+            // A task read from this file keeps the calendar its record points
+            // at while that calendar has the name the task refers to: names
+            // need not be unique, uids are.
+            if let name = t.calendar, let row = own.records[t.uid]?.row,
+               let raw = Self.bytes(row, taskMap.fm[MPP.TaskField.calendarUniqueID], count: 4),
+               let uid = BinaryReader(raw).i32(at: 0).map(Int.init), calendars.nameByUID[uid] == name {
+                calUID = uid
+            } else if let name = t.calendar {
                 guard let uid = calendars.uidByName[name] else {
                     throw MPPError.invalidProject("task \(t.uid) references unknown calendar \"\(name)\"")
                 }
@@ -2020,6 +2027,9 @@ private struct CalendarBuild {
     var rows: [CalendarTable.Row]
     var vars: [(uid: Int, field: UInt32, payload: [UInt8])]
     var uidByName: [String: Int] = [:]
+    /// The names of the base calendars read from the file, by uid, as the
+    /// project now has them.
+    var nameByUID: [Int: String] = [:]
     var nextUID: Int
     let standardUID: Int
     let standardGUID: [UInt8]
@@ -2090,26 +2100,29 @@ private struct CalendarBuild {
             setData(uid: stdUID, CalendarData.build(week: std.week, exceptions: std.exceptions))
         }
         // Additional base calendars. A file saved over itself already has them:
-        // one the template has by name is updated in place, keeping its uid,
-        // which is what tasks and resources refer to it by.
+        // each is matched by its uid, which is what tasks and resources refer
+        // to it by, so calendars without a name or sharing one (Project allows
+        // both) are saved as they are. A new calendar is matched by name.
         var seen = Set<String>()
         for cal in project.calendars {
-            guard seen.insert(cal.name).inserted else {
-                throw MPPError.invalidProject("duplicate calendar name \"\(cal.name)\"")
-            }
             // The same calendar as read from the file — by uid, so a rename
             // keeps the row tasks and resources point at.
             if cal.uid != 0, cal.uid != stdUID, keptUIDs.contains(cal.uid), baseNames[cal.uid] != nil {
+                nameByUID[cal.uid] = cal.name
                 if baseNames[cal.uid] != cal.name {
                     setName(uid: cal.uid, cal.name)
                     if uidByName[baseNames[cal.uid] ?? ""] == cal.uid { uidByName[baseNames[cal.uid] ?? ""] = nil }
                 }
-                uidByName[cal.name] = cal.uid
+                if !cal.name.isEmpty { uidByName[cal.name] = cal.uid }
                 if !(cal.week.isEmpty && cal.exceptions.isEmpty
                      && table.payload(uid: cal.uid, field: MPP.CalendarVar.data) == nil) {
                     setData(uid: cal.uid, CalendarData.build(week: cal.week, exceptions: cal.exceptions))
                 }
                 continue
+            }
+            // A new calendar is found by its name, so two cannot share one.
+            guard seen.insert(cal.name).inserted else {
+                throw MPPError.invalidProject("duplicate calendar name \"\(cal.name)\"")
             }
             if let uid = uidByName[cal.name] {
                 // Standard's definition is the project calendar's, set above.
