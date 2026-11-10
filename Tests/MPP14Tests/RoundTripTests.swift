@@ -36,14 +36,6 @@ final class RoundTripTests: XCTestCase {
     private static let knownDifferences: [String: Set<String>] = [
         // Ten unnamed base calendars: refused as duplicate names.
         "ResourceIdAndUniqueId-project2013-mpp14.mpp": ["save"],
-        // Tasks after an FF or SF link, a link on their summary or none at
-        // all are given a Start No Earlier Than constraint at their start.
-        "mpp14barstyle.mpp": ["constraint", "constraintDate"],
-        "mpp14baseline.mpp": ["constraint", "constraintDate"],
-        "mpp14embedded.mpp": ["constraint", "constraintDate"],
-        "mpp14relations.mpp": ["constraint", "constraintDate"],
-        "mpp14resource.mpp": ["constraint", "constraintDate"],
-        "mpp14timephased.mpp": ["constraint", "constraintDate"],
         // The project calendar is "24 Hours": the Standard calendar is
         // written under its name.
         "mpp14header.mpp": ["calendar", "calendars"],

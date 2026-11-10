@@ -421,9 +421,30 @@ private final class Session {
             }
         }
 
-        // Starts the links already produce: those tasks stay ASAP. Every other
-        // auto-scheduled start after the project start is pinned with SNET,
-        // as Project pins a typed-in date, so it survives recalculation.
+        // An auto-scheduled task's start after the project start that nothing
+        // explains — a date set on the task rather than worked out — is
+        // pinned with SNET, as Project pins a typed-in date, so it survives
+        // recalculation. A start is explained, and the task stays ASAP, when
+        // the scheduler puts the task there (a link of any type, with any lag,
+        // a link on a summary above it, its calendar), when the file as read
+        // had the task at that start with no constraint (Project put it
+        // there), or when an FS or SS link produces it (below).
+        var explained: Set<Int> = []
+        if let source {
+            for t in project.tasks {
+                if let was = source.task(uid: t.uid), was.guid.count == 16, was.guid == t.guid,
+                   was.constraint == nil, !was.manual, was.start == t.start { explained.insert(t.uid) }
+            }
+        }
+        var scheduled = project
+        if (try? Scheduler.schedule(&scheduled)) != nil {
+            for (t, s) in zip(project.tasks, scheduled.tasks) where t.start == s.start { explained.insert(t.uid) }
+        }
+        // Tasks a link binds, directly or through a summary above them.
+        var linked = Set(project.relations.map(\.succUID))
+        for t in project.tasks where linked.contains(t.parentUID) { linked.insert(t.uid) }
+
+        // Starts the FS and SS links produce, and the date each imposes.
         var taskTime: [String: WorkingTime] = [:]
         for cal in project.calendars { taskTime[cal.name] = WorkingTime(calendar: cal) }
         var linkStart: [Int: Date] = [:]
@@ -606,7 +627,7 @@ private final class Session {
             var constraint = task?.constraint
             var constraintDate = task?.constraintDate
             if task != nil, constraint == nil, !manual, !isSummary,
-               start > project.start, linkStart[uid] != start {
+               start > project.start, linkStart[uid] != start, !explained.contains(uid) {
                 constraint = "SNET"
                 constraintDate = start
             }
@@ -661,10 +682,15 @@ private final class Session {
             } else if constraint != nil || isMilestone || manual {
                 driver = D.constraint
                 mark1255 = start
-            } else if let linked = linkStart[uid], linked == start {
+            } else if let produced = linkStart[uid], produced == start {
                 driver = D.predecessor
                 let moment = linkDriver[uid] ?? start
                 (mark387, mark1255) = (moment, moment)
+            } else if linked.contains(uid), start > project.start {
+                // Driven by an FF or SF link, a lag in elapsed time or a link
+                // on a summary: the date it imposes is the start.
+                driver = D.predecessor
+                (mark387, mark1255) = (start, start)
             } else {
                 driver = D.projectStart
                 (mark387, mark1255) = (start, start)
