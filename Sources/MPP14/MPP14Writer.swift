@@ -900,8 +900,9 @@ private final class Session {
                     extra.append((W.Rsc.baselineBudget[slot].cost, W.unsetDouble))
                 }
             }
-            let base = project.resourceCalendars.first { $0.resourceUID == res.uid && $0.uid == res.calendarUID }?.baseCalendarUID
-            let calUID = calendars.addResourceCalendar(resourceUID: res.uid, guid: res.guid, base: base)
+            let own = project.resourceCalendars.first { $0.resourceUID == res.uid && $0.uid == res.calendarUID }
+            let calUID = calendars.addResourceCalendar(resourceUID: res.uid, guid: res.guid, base: own?.baseCalendarUID,
+                                                       calendar: own)
             e.u32(RF.uniqueID, UInt32(res.uid))
             e.u32(RF.id, UInt32(n + 1))
             e.f64(RF.maxUnits, res.maxUnits * W.pctScale)
@@ -2185,7 +2186,10 @@ private struct CalendarBuild {
     /// A resource's own calendar row: (calendar uid, base, resource uid),
     /// GUIDs = the resource's twice, then the base's. The base is the one
     /// the resource had in the file while that calendar is kept, else Standard.
-    mutating func addResourceCalendar(resourceUID: Int, guid: [UInt8], base: Int? = nil) -> Int? {
+    /// Its own working times and exceptions come with it: as the file had
+    /// them, byte for byte, while unchanged.
+    mutating func addResourceCalendar(resourceUID: Int, guid: [UInt8], base: Int? = nil,
+                                      calendar: ProjectCalendar? = nil) -> Int? {
         guard var row = resourceProto, let cols = table.columns else { return nil }
         let uid = nextUID
         nextUID += 1
@@ -2203,6 +2207,27 @@ private struct CalendarBuild {
             row.rec2.replaceSubrange(32..<48, with: baseGUID.count == 16 ? baseGUID : standardGUID)
         }
         rows.append(row)
+        if let cal = calendar {
+            let read = table.rows.contains { !table.isBase($0) && table.uid(of: $0) == cal.uid
+                && table.resourceUID(of: $0) == resourceUID }
+            let name = read ? table.payload(uid: cal.uid, field: MPP.CalendarVar.name) : nil
+            var data = read ? table.payload(uid: cal.uid, field: MPP.CalendarVar.data) : nil
+            if let d = data {
+                let was = CalendarData.parse(d)
+                if was.week != cal.week || was.exceptions != cal.exceptions { data = nil }
+            }
+            if data == nil, !cal.week.isEmpty || !cal.exceptions.isEmpty {
+                data = CalendarData.build(week: cal.week, exceptions: cal.exceptions)
+            }
+            if let name { vars.append((uid, MPP.CalendarVar.name, name)) }
+            if let data { vars.append((uid, MPP.CalendarVar.data, data)) }
+            // A resource calendar's meta: byte 2 counts its var entries, and
+            // byte 9 bit 0 flags its definition blob (byte 8 is left as is).
+            if let i = rows.indices.last, rows[i].meta.count > 9 {
+                rows[i].meta[2] = UInt8(vars.filter { $0.uid == uid }.count)
+                rows[i].meta[9] = (rows[i].meta[9] & ~0x01) | (data != nil ? 0x01 : 0)
+            }
+        }
         return uid
     }
 
