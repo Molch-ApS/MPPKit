@@ -75,12 +75,17 @@ Swift Package Manager:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Molch-ApS/MPPKit.git", from: "0.1.0"),
+    .package(url: "https://github.com/Molch-ApS/MPPKit.git", from: "0.6.0"),
 ],
 targets: [
     .target(name: "MyApp", dependencies: ["MPPKit"]),
 ]
 ```
+
+Before 1.0, a minor version can break the API; [CHANGELOG.md](CHANGELOG.md)
+says what changed. **0.6.0** has one breaking change: `Baseline.cost` is in
+currency units, as `ProjectTask.cost` is, not in hundredths. Code that divided
+or multiplied it by 100 must stop.
 
 ## Usage
 
