@@ -14,7 +14,8 @@ import FoundationEssentials
 import Foundation
 #endif
 
-/// Resource loading: how much work each person is carrying, week by week.
+/// Resource loading: how much work each person is carrying, week by week,
+/// and the most they are booked at one time.
 ///
 /// This lives in the model rather than in a view because two places need the same
 /// answer — the Resources screen draws it, and the schedule's status bar reports
@@ -71,20 +72,75 @@ public extension Project {
         return out
     }
 
-    /// The busiest week for a resource, as a multiple of their capacity.
+    /// The most a resource is booked at any one time: the units of every
+    /// assignment whose task is under way then, added up.
+    ///
+    /// This is the figure to hold against Max Units. A week's load is an
+    /// average: someone at 300% on a three-day task carries 1.3 over that week
+    /// and would pass for someone with Max Units 200%, though on each of the
+    /// three days they are booked half again beyond what they have.
     func peakLoad(of resource: Resource) -> Double {
-        weeklyLoad(of: resource).max() ?? 0
+        sweep(resource).peak
     }
 
-    /// Whether anyone is booked beyond their capacity.
+    /// Whether the resource is booked beyond their Max Units at some time.
     func isOverAllocated(_ resource: Resource) -> Bool {
         peakLoad(of: resource) > capacity(of: resource) + 0.001
     }
 
+    /// The tasks under way while the resource is booked beyond their Max
+    /// Units, by `uid`: the ones to move, shorten or hand to someone else.
+    func overAllocatedTasks(of resource: Resource) -> Set<Int> {
+        sweep(resource).over
+    }
+
+    /// Every task that has someone over-allocated on it while it runs.
+    func overAllocatedTasks() -> Set<Int> {
+        resources.reduce(into: Set<Int>()) { $0.formUnion(sweep($1).over) }
+    }
+
+    /// One pass over a resource's assignments in time: the highest load, and
+    /// the tasks under way whenever the load is above the resource's capacity.
+    /// A task that ends as another starts doesn't meet it, and a milestone
+    /// takes no time, so no load.
+    private func sweep(_ resource: Resource) -> (peak: Double, over: Set<Int>) {
+        let byUID = Dictionary(tasks.map { ($0.uid, $0) }, uniquingKeysWith: { a, _ in a })
+        struct Edge { let at: Date; let starts: Bool; let task: Int; let units: Double }
+        var edges: [Edge] = []
+        for a in assignments where a.resourceUID == resource.uid {
+            guard let t = byUID[a.taskUID], let start = t.start, let finish = t.finish, finish > start else { continue }
+            edges.append(Edge(at: start, starts: true, task: t.uid, units: a.units))
+            edges.append(Edge(at: finish, starts: false, task: t.uid, units: a.units))
+        }
+        // Ends before starts at the same moment.
+        edges.sort { $0.at != $1.at ? $0.at < $1.at : (!$0.starts && $1.starts) }
+        let limit = capacity(of: resource) + 0.001
+        var under: [Int: Double] = [:]      // the tasks under way, with their units
+        var peak = 0.0
+        var over = Set<Int>()
+        var i = 0
+        while i < edges.count {
+            let at = edges[i].at
+            while i < edges.count, edges[i].at == at {
+                let e = edges[i]
+                if e.starts { under[e.task, default: 0] += e.units } else {
+                    let left = (under[e.task] ?? 0) - e.units
+                    under[e.task] = left > 0.000_001 ? left : nil
+                }
+                i += 1
+            }
+            // Added up afresh each time, so nothing is left over from rounding.
+            let load = under.values.reduce(0, +)
+            peak = max(peak, load)
+            if load > limit { over.formUnion(under.keys) }
+        }
+        return (peak, over)
+    }
+
     /// How many people are over-allocated, and by how much at the worst.
     ///
-    /// Returns the count and the highest load seen, so a caller can say "2 over
-    /// capacity" without recomputing. The count is what belongs on the schedule's
+    /// Returns the count and the highest load seen, against each person's own
+    /// capacity, so a caller can say "2 over capacity" without recomputing. The count is what belongs on the schedule's
     /// status bar: a plan whose dates are fine and whose people are double-booked
     /// is not a plan that can be executed, and nothing else on that screen says so.
     func allocationSummary() -> (over: Int, peak: Double) {
