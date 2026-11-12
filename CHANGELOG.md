@@ -3,6 +3,21 @@
 Each release is also on [GitHub](https://github.com/Molch-ApS/MPPKit/releases),
 with every pull request in it. Releases before 0.6.0 are described only there.
 
+## 0.6.2
+
+### Changed
+
+- `Project.peakLoad(of:)` is the most a resource is booked at any one time:
+  the units of every assignment whose task is under way then, added up. It
+  was the busiest week's average, which let someone at 300% on a three-day
+  task pass for a resource with Max Units 200%. `isOverAllocated(_:)` and
+  `allocationSummary()` follow it. `weeklyLoad(of:)` is unchanged.
+
+### Added
+
+- `Project.overAllocatedTasks(of:)` and `overAllocatedTasks()`: the tasks
+  under way while a resource is booked beyond its Max Units.
+
 ## 0.6.1
 
 ### Fixed
