@@ -133,9 +133,11 @@ public enum Zlib {
 
     // MARK: Decompress
 
-    /// The bytes a zlib stream holds, or nil when it isn't one or its check
-    /// value doesn't match.
-    public static func decompress(_ input: [UInt8]) -> [UInt8]? {
+    /// The bytes a zlib stream holds, or nil when it isn't one, its check
+    /// value doesn't match, or it holds more than `limit` bytes. Deflate
+    /// packs up to about 1,000 to 1: a few KB in a file can ask for gigabytes,
+    /// so the output is bounded (64 MB unless said).
+    public static func decompress(_ input: [UInt8], limit: Int = 64 << 20) -> [UInt8]? {
         guard input.count >= 6, input[0] & 0x0F == 8, (Int(input[0]) << 8 | Int(input[1])) % 31 == 0,
               input[1] & 0x20 == 0 else { return nil }
         var reader = BitReader(bytes: input, position: 2)
@@ -149,13 +151,14 @@ public enum Zlib {
                 reader.alignToByte()
                 guard let len = reader.bytes(2), let nlen = reader.bytes(2) else { return nil }
                 let length = Int(len[0]) | Int(len[1]) << 8
-                guard length == ~(Int(nlen[0]) | Int(nlen[1]) << 8) & 0xFFFF, let data = reader.bytes(length) else { return nil }
+                guard length == ~(Int(nlen[0]) | Int(nlen[1]) << 8) & 0xFFFF, out.count + length <= limit,
+                      let data = reader.bytes(length) else { return nil }
                 out += data
             case 1:
-                guard inflate(&reader, &out, literal: fixedLiteral, distance: fixedDistance) else { return nil }
+                guard inflate(&reader, &out, literal: fixedLiteral, distance: fixedDistance, limit: limit) else { return nil }
             case 2:
                 guard let (literal, distance) = dynamicTables(&reader),
-                      inflate(&reader, &out, literal: literal, distance: distance) else { return nil }
+                      inflate(&reader, &out, literal: literal, distance: distance, limit: limit) else { return nil }
             default:
                 return nil
             }
@@ -263,10 +266,11 @@ public enum Zlib {
         return (literal, distance)
     }
 
-    private static func inflate(_ reader: inout BitReader, _ out: inout [UInt8], literal: Huffman, distance: Huffman) -> Bool {
+    private static func inflate(_ reader: inout BitReader, _ out: inout [UInt8], literal: Huffman, distance: Huffman,
+                                limit: Int) -> Bool {
         while true {
             guard let symbol = literal.decode(&reader) else { return false }
-            if symbol < 256 { out.append(UInt8(symbol)); continue }
+            if symbol < 256 { guard out.count < limit else { return false }; out.append(UInt8(symbol)); continue }
             if symbol == 256 { return true }
             let k = symbol - 257
             guard k < lengthBase.count, let extra = reader.bits(lengthExtra[k]) else { return false }
@@ -274,7 +278,7 @@ public enum Zlib {
             guard let d = distance.decode(&reader), d < distanceBase.count,
                   let dextra = reader.bits(distanceExtra[d]) else { return false }
             let back = distanceBase[d] + dextra
-            guard back <= out.count else { return false }
+            guard back <= out.count, out.count + length <= limit else { return false }
             let start = out.count - back
             for i in 0..<length { out.append(out[start + i]) }
         }

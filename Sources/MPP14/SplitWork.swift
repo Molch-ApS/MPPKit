@@ -26,12 +26,13 @@ extension MPP {
     /// The gaps a planned-work payload holds; empty for work in one piece.
     public static func splitGaps(_ planned: [UInt8]) -> [TaskSplit] {
         let r = BinaryReader(planned)
-        guard let count = r.u16(at: 0), count >= 3, let first = r.u32(at: 4) else { return [] }
+        // Int(exactly:): a u32 past 2³¹ doesn't fit where Int is 32 bits (the web core).
+        guard let count = r.u16(at: 0), count >= 3, let first = r.u32(at: 4).flatMap({ Int(exactly: $0) }) else { return [] }
         var gaps: [TaskSplit] = []
         var work = 0, previous = 0
         for i in 0..<Int(count) {
-            let at = Int(first) + i * splitRecordSize
-            guard let units = r.f64(at: at + 8), let end = r.u32(at: at + 24) else { return [] }
+            let at = first + i * splitRecordSize
+            guard let units = r.f64(at: at + 8)?.fromFile, let end = r.u32(at: at + 24) else { return [] }
             let minutes = Int((Double(end) / 80).rounded()) - previous
             previous += minutes
             if units == 0 {

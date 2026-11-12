@@ -424,7 +424,7 @@ private final class Session {
                 guard let s = t.start, let f = t.finish else {
                     throw MPPError.invalidProject("task \(t.uid) has no start or finish; run Scheduler.schedule first")
                 }
-                eff[t.uid] = (s, f, Int((t.durationDays * tenthsPerDay).rounded()))
+                eff[t.uid] = (s, f, Int.clamped(t.durationDays * tenthsPerDay))
             }
         }
 
@@ -462,8 +462,8 @@ private final class Session {
             guard let p = eff[rel.predUID], let s = eff[rel.succUID] else { continue }
             let time = byUID[rel.succUID]?.calendar.flatMap { taskTime[$0] } ?? time
             let lag = rel.lagIsPercent
-                ? Int((rel.lagDays * (byUID[rel.predUID].map { $0.durationDays } ?? 0) * tenthsPerDay).rounded()) / 10
-                : Int((rel.lagDays * tenthsPerDay).rounded()) / 10
+                ? Int.clamped(rel.lagDays * (byUID[rel.predUID].map { $0.durationDays } ?? 0) * tenthsPerDay) / 10
+                : Int.clamped(rel.lagDays * tenthsPerDay) / 10
             var candidate: Date?, base: Date?
             switch rel.type {
             case "FS":
@@ -491,7 +491,7 @@ private final class Session {
         func rolled(_ uids: [Int]) -> (total: Double, done: Double) {
             uids.reduce((0, 0)) { ($0.total + (durationDone[$1]?.total ?? 0), $0.done + (durationDone[$1]?.done ?? 0)) }
         }
-        func percent(_ r: (total: Double, done: Double)) -> Int { r.total > 0 ? Int((r.done / r.total).rounded()) : 0 }
+        func percent(_ r: (total: Double, done: Double)) -> Int { r.total > 0 ? Int.clamped(r.done / r.total) : 0 }
         for t in deepestFirst {
             if let kids = children[t.uid], !kids.isEmpty {
                 durationDone[t.uid] = rolled(kids)
@@ -551,10 +551,10 @@ private final class Session {
             for kid in children[t.uid] ?? [] { sum += workSum[kid] ?? 0; done += workDone[kid] ?? 0 }
             workSum[t.uid] = sum
             workDone[t.uid] = done
-            if !(children[t.uid] ?? []).isEmpty, sum > 0 { workPct[t.uid] = Int((done / sum * 100).rounded()) }
+            if !(children[t.uid] ?? []).isEmpty, sum > 0 { workPct[t.uid] = Int.clamped(done / sum * 100) }
         }
         let topWork = top.reduce(0) { $0 + workSum[$1.uid]! }
-        let workPct0 = topWork > 0 ? Int((top.reduce(0) { $0 + workDone[$1.uid]! } / topWork * 100).rounded()) : nil
+        let workPct0 = topWork > 0 ? Int.clamped(top.reduce(0) { $0 + workDone[$1.uid]! } / topWork * 100) : nil
 
         let pStart = project.tasks.map { eff[$0.uid]!.start }.min() ?? project.start
         let pFinish = project.tasks.map { eff[$0.uid]!.finish }.max() ?? project.start
@@ -664,7 +664,7 @@ private final class Session {
             e.u16(F.taskType, W.taskTypeCodes[task?.taskType ?? "fixed_units"] ?? 0)
             e.bit(F.effortDriven, task?.effortDriven ?? false)
 
-            let actualTenths = Int((Double(tenths) * Double(percent) / 100).rounded())
+            let actualTenths = Int.clamped(Double(tenths) * Double(percent) / 100)
             e.u16(F.percentComplete, UInt16(percent))
             let workPercent = workPercent ?? percent
             e.u16(F.percentWorkComplete, UInt16(workPercent))
@@ -1422,7 +1422,7 @@ private final class Session {
                 if let i = assnMap.bits[id], MPP.metaBit(meta: row.meta, meta2: row.meta2, i) == 1 { return false }
             }
             let work = assnMap.fm[A.actualWork].flatMap { w in
-                BinaryReader(w.block == 0 ? row.rec : row.rec2).f64(at: w.offset) } ?? 0
+                BinaryReader(w.block == 0 ? row.rec : row.rec2).f64(at: w.offset)?.fromFile } ?? 0
             return work == 0
         }
         // Prefer one whose planned work runs in one piece: only the first
@@ -1544,7 +1544,7 @@ private final class Session {
                     e.f64(A.remainingWork, remainingWork)
                     e.u16(A.percentWorkComplete, UInt16(p))
                 }
-                let elapsed = Int((Double(tenths) * Double(p) / 100).rounded())
+                let elapsed = Int.clamped(Double(tenths) * Double(p) / 100)
                 remainingTenths = tenths - elapsed
                 reached = p == 100 ? finish : time.advance(start, minutes: elapsed / 10)
                 if !keepsWork {
@@ -1660,7 +1660,7 @@ private final class Session {
         func ts(_ id: UInt32) -> Date? {
             bytes(row, fm[id], count: 4).flatMap { MPP.decodeTimestamp($0, offset: 0) }
         }
-        func f64(_ id: UInt32) -> Double? { bytes(row, fm[id], count: 8).flatMap { BinaryReader($0).f64(at: 0) } }
+        func f64(_ id: UInt32) -> Double? { bytes(row, fm[id], count: 8).flatMap { BinaryReader($0).f64(at: 0)?.fromFile } }
         // Not every file keeps % work complete in the fixed block; absent, it is 0.
         let pct = bytes(row, fm[A.percentWorkComplete], count: 2).flatMap { BinaryReader($0).u16(at: 0) }
         guard let w = f64(A.work), let u = f64(A.units) else { return false }
@@ -1845,7 +1845,7 @@ private final class Session {
                     rec[4] = 14
                     return rec
                 }()
-                if let pts = w.points { rec[4] = UInt8(clamping: max(4, Int((pts / 7).rounded()))) }
+                if let pts = w.points { rec[4] = UInt8(clamping: max(4, Int.clamped(pts / 7))) }
                 return rec
             }
             // Slots the app's columns occupy, in the file's order; the rest stay put.

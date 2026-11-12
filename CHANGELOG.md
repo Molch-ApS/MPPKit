@@ -3,6 +3,26 @@
 Each release is also on [GitHub](https://github.com/Molch-ApS/MPPKit/releases),
 with every pull request in it. Releases before 0.6.0 are described only there.
 
+## 0.6.1
+
+### Fixed
+
+- A malformed file fails with an error instead of hanging or crashing the
+  app that opens it. The container: the DIFAT chain may not loop and its count
+  isn't trusted, a stream can't be larger than the file, storages nest at
+  most 64 deep, the streams together may not ask for more than a few times
+  the file (many entries can name one chain), the mini sector shift must be 6
+  and the cutoff 4096, files over 1 GB are refused, and sector ids past 2³¹
+  no longer trap where `Int` is 32 bits (WebAssembly).
+- The reader and the model: zlib output is bounded (`Zlib.decompress(_:limit:)`,
+  64 MB unless said), a calendar's exceptions cover at most 400,000 days
+  together, `\ansicpg` past `UInt32.max` is ignored, numbers read from the file
+  are finite and within ±10¹⁵ (`Double.fromFile`), and durations, lags and
+  percentages become whole numbers through one helper that can't trap
+  (`Int.clamped`).
+- `MalformedFileTests` makes damaged files byte by byte (no real file needed)
+  and wants each to fail within a second.
+
 ## 0.6.0
 
 ### Breaking change

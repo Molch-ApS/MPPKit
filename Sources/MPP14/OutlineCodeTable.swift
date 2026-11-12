@@ -116,7 +116,7 @@ struct OutlineCodeTable {
             return Value(row: row(r), uid: uid, level: Int(level ?? 1), parent: Int(parent ?? 0),
                          guid: Array(r.data2[0..<16]), list: list(r),
                          name: v[Var.name].map(MPP.decodeUnicode) ?? "",
-                         sort: v[Var.sort].flatMap { BinaryReader($0).f64(at: 0) } ?? 0,
+                         sort: v[Var.sort].flatMap { BinaryReader($0).f64(at: 0)?.fromFile } ?? 0,
                          description: v[Var.description].map(MPP.decodeUnicode) ?? "")
         }
     }

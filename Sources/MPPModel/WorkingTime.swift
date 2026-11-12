@@ -35,6 +35,8 @@ public struct WorkingTime: Sendable {
     /// A safety bound on day-by-day scans: a calendar with no working time at
     /// all must not loop forever.
     private static let scanLimit = 36_600
+    /// The days all of a calendar's exceptions may cover together.
+    public static let exceptionDayLimit = 400_000
 
     public init(calendar: ProjectCalendar?) {
         let cal = calendar ?? ProjectCalendar()
@@ -45,9 +47,17 @@ public struct WorkingTime: Sendable {
         }
         self.windows = windows
         var days: [Int: [ClosedRange<Int>]] = [:]
+        // One entry per day: a damaged file's calendar can hold 9,999
+        // exceptions of 65,535 days each. Real ones come nowhere near
+        // `exceptionDayLimit` days together (Project's whole date range is about
+        // 60,000); past it the rest are left out rather than take minutes and
+        // gigabytes.
+        var budget = Self.exceptionDayLimit
         for x in cal.exceptions {
             let first = MPPTime.dayNumber(x.start), last = MPPTime.dayNumber(x.lastDay)
             guard first <= last else { continue }
+            guard last - first < budget else { break }
+            budget -= last - first + 1
             let ranges = x.working.sorted { $0.lowerBound < $1.lowerBound }
             for d in first...last { days[d] = ranges }
         }

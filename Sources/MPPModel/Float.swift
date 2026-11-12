@@ -61,13 +61,13 @@ extension Project {
     /// Whether one task is critical, by the same rule as `criticalUIDs`.
     public func isCritical(uid: Int) -> Bool {
         guard let t = task(uid: uid), t.percentComplete < 100, let m = totalFloatMinutes(uid: uid) else { return false }
-        return m <= Int((criticalSlackDays * Double(minutesPerDay)).rounded())
+        return m <= Int.clamped(criticalSlackDays * Double(minutesPerDay))
     }
 
     /// The critical tasks: unfinished, with total float at or below the
     /// project's threshold.
     public func criticalUIDs() -> Set<Int> {
-        let limit = Int((criticalSlackDays * Double(minutesPerDay)).rounded())
+        let limit = Int.clamped(criticalSlackDays * Double(minutesPerDay))
         let time = workingTimes()
         var out = Set<Int>()
         for t in tasks where t.percentComplete < 100 {
@@ -139,7 +139,7 @@ extension Project {
             let t = tasks[i]
             guard !summaries.contains(t.uid), !t.manual, !t.isElapsed, let s = t.start, let f = t.finish else { continue }
             if !t.splits.isEmpty { tasks[i].splitMinutes = t.splits.reduce(0) { $0 + $1.idleMinutes }; continue }
-            let gap = time(t).minutes(from: s, to: f) - Int((t.durationDays * Double(minutesPerDay)).rounded())
+            let gap = time(t).minutes(from: s, to: f) - Int.clamped(t.durationDays * Double(minutesPerDay))
             tasks[i].splitMinutes = gap > 1 ? gap : 0
         }
     }
