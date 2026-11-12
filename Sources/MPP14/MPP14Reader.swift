@@ -136,7 +136,7 @@ public final class MPP14File {
 
         func f64(_ i: Int, _ id: UInt32) -> Double? {
             guard let it = fieldMap[id] else { return nil }
-            return BinaryReader(source(i, it)).f64(at: it.offset)
+            return BinaryReader(source(i, it)).f64(at: it.offset)?.fromFile
         }
 
         func timestamp(_ i: Int, _ id: UInt32) -> Date? {
@@ -479,7 +479,7 @@ public final class MPP14File {
         }
         for (index, id) in ids.1.enumerated() {
             guard let raw = k.varBytes(uid, id), raw.count >= 8,
-                  let v = BinaryReader(raw).f64(at: 0) else { continue }
+                  let v = BinaryReader(raw).f64(at: 0)?.fromFile else { continue }
             numbers[index + 1] = v
         }
         for (index, id) in ids.2.enumerated() {
@@ -790,7 +790,7 @@ public final class MPP14File {
 
     private static func double(_ raw: [UInt8]?) -> Double? {
         guard let raw, raw.count >= 8, let v = BinaryReader(raw).f64(at: 0) else { return nil }
-        return v == nullDouble ? nil : v
+        return v == nullDouble ? nil : v.fromFile
     }
 
     private func readTaskBaselines(_ k: EntityClass, uid: Int) -> [Int: Baseline] {
@@ -808,11 +808,11 @@ public final class MPP14File {
                 b.durationDays = days(tenths)
             }
             if let work = k.varBytes(uid, Self.taskBaselineWork[slot]), work.count >= 8,
-               let w = BinaryReader(work).f64(at: 0) {
+               let w = BinaryReader(work).f64(at: 0)?.fromFile {
                 b.workHours = Self.hours(w)
             }
             if let cost = k.varBytes(uid, Self.taskBaselineCost[slot]), cost.count >= 8,
-               let c = BinaryReader(cost).f64(at: 0) {
+               let c = BinaryReader(cost).f64(at: 0)?.fromFile {
                 b.cost = c / 100
             }
             // A cleared slot rather than a saved one.
@@ -920,7 +920,7 @@ public final class MPP14File {
                     if skipped.contains(word) { stack[stack.count - 1].skip = true; continue }
                     if skip { continue }
                     switch word {
-                    case "ansicpg": if let p = param, p > 0 { codePage = UInt32(p) }
+                    case "ansicpg": if let p = param, let cp = UInt32(exactly: p), cp > 0 { codePage = cp }
                     case "uc": stack[stack.count - 1].uc = max(0, param ?? 1)
                     case "u":
                         flushBytes()

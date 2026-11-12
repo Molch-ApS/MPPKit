@@ -93,7 +93,7 @@ public enum MSPDI {
             x.leaf("Priority", "\(t.priority)")
             if let s = t.start { x.leaf("Start", date(s)) }
             if let f = t.finish { x.leaf("Finish", date(f)) }
-            x.leaf("Duration", duration(minutes: Int((t.durationDays * Double(p.minutesPerDay)).rounded())))
+            x.leaf("Duration", duration(minutes: Int.clamped(t.durationDays * Double(p.minutesPerDay))))
             x.leaf("DurationFormat", "\(unitCode(t.durationUnits) + (t.estimated ? 32 : 0))")
             x.leaf("Estimated", t.estimated ? "1" : "0")
             x.leaf("Milestone", t.milestone || t.durationDays == 0 ? "1" : "0")
@@ -112,8 +112,8 @@ public enum MSPDI {
                 x.open("PredecessorLink")
                 x.leaf("PredecessorUID", "\(r.predUID)")
                 x.leaf("Type", "\(["FF": 0, "FS": 1, "SF": 2, "SS": 3][r.type] ?? 1)")
-                let lag = r.lagIsPercent ? Int((r.lagDays * 10_000).rounded())
-                                         : Int((r.lagDays * Double(p.minutesPerDay) * 10).rounded())
+                let lag = r.lagIsPercent ? Int.clamped(r.lagDays * 10_000)
+                                         : Int.clamped(r.lagDays * Double(p.minutesPerDay) * 10)
                 x.leaf("LinkLag", "\(lag)")
                 x.leaf("LagFormat", "\(unitCode(r.lagUnits))")
                 x.close("PredecessorLink")
@@ -130,8 +130,8 @@ public enum MSPDI {
                 x.leaf("Number", "\(n)")
                 if let s = b.start { x.leaf("Start", date(s)) }
                 if let f = b.finish { x.leaf("Finish", date(f)) }
-                x.leaf("Duration", duration(minutes: Int((b.durationDays * Double(p.minutesPerDay)).rounded())))
-                x.leaf("Work", duration(minutes: Int((b.workHours * 60).rounded())))
+                x.leaf("Duration", duration(minutes: Int.clamped(b.durationDays * Double(p.minutesPerDay))))
+                x.leaf("Work", duration(minutes: Int.clamped(b.workHours * 60)))
                 x.close("Baseline")
             }
             x.close("Task")
@@ -162,7 +162,7 @@ public enum MSPDI {
             x.leaf("Units", String(format: "%.2f", a.units))
             let hours = a.workHours > 0 ? a.workHours
                 : (p.task(uid: a.taskUID).map { $0.durationDays * Double(p.minutesPerDay) / 60 * a.units } ?? 0)
-            x.leaf("Work", duration(minutes: Int((hours * 60).rounded())))
+            x.leaf("Work", duration(minutes: Int.clamped(hours * 60)))
             x.close("Assignment")
         }
         x.close("Assignments")
@@ -398,7 +398,7 @@ public enum MSPDI {
             }
             number = ""
         }
-        return sign * Int(minutes.rounded())
+        return sign * Int.clamped(minutes)
     }
 
     static func unitCode(_ label: String) -> Int {

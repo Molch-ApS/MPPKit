@@ -118,7 +118,7 @@ public enum Scheduler {
         /// A task's duration in minutes: working minutes, or wall-clock ones
         /// for an elapsed duration.
         func durationMinutes(_ t: ProjectTask) -> Int {
-            Int((t.durationDays * Double(project.minutesPerDay)).rounded())
+            Int.clamped(t.durationDays * Double(project.minutesPerDay))
         }
         /// `date` moved by a link's lag, forwards (`sign` 1) or backwards (-1),
         /// in the successor's working time — or wall-clock for an elapsed lag;
@@ -127,9 +127,9 @@ public enum Scheduler {
             let minutes: Int
             if rel.lagIsPercent {
                 let pred = project.tasks[index[rel.predUID]!]
-                minutes = Int((rel.lagDays * Double(durationMinutes(pred))).rounded())
+                minutes = Int.clamped(rel.lagDays * Double(durationMinutes(pred)))
             } else {
-                minutes = Int((rel.lagDays * Double(project.minutesPerDay)).rounded())
+                minutes = Int.clamped(rel.lagDays * Double(project.minutesPerDay))
             }
             let m = minutes * sign
             if m == 0 { return date }
@@ -209,7 +209,7 @@ public enum Scheduler {
                 // constraints give, and the done part stays (as in Project).
                 if let a = started, project.splitsInProgressTasks, !isMilestone, !task.isElapsed,
                    task.percentComplete > 0, task.percentComplete < 100 {
-                    let done = Int((Double(minutes) * Double(task.percentComplete) / 100).rounded())
+                    let done = Int.clamped(Double(minutes) * Double(task.percentComplete) / 100)
                     let earlier = task.splits.filter { $0.workMinutes < done }
                     let stop = wt.advance(a, minutes: done + earlier.reduce(0) { $0 + $1.idleMinutes })
                     let resume = wt.nextWorkingMoment(wanted)
@@ -331,7 +331,7 @@ public enum Scheduler {
                 // the day it started, and only its finish has float.
                 if task.actualStart != nil, let s = task.start {
                     ls = s
-                    let done = Int((Double(minutes) * Double(task.percentComplete) / 100).rounded())
+                    let done = Int.clamped(Double(minutes) * Double(task.percentComplete) / 100)
                     stopDate[uid] = after(s, done, task, wt)
                 }
                 // Project writes an automatic task's late finish at the end of

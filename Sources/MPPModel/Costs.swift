@@ -92,7 +92,7 @@ extension Project {
     static func cost(of a: Assignment, on t: ProjectTask, rates: [PayRate], accrual: String,
                      time: WorkingTime, minutesPerDay: Int) -> (Double, Double) {
         guard let start = t.start, let finish = t.finish, !rates.isEmpty else { return (0, 0) }
-        let minutes = Int((t.durationDays * Double(minutesPerDay)).rounded())
+        let minutes = Int.clamped(t.durationDays * Double(minutesPerDay))
         let gaps = t.splits.filter { $0.workMinutes < minutes }
         /// The task's working minutes from its start to `date`, its gaps left out.
         func work(until date: Date) -> Int {
@@ -106,7 +106,7 @@ extension Project {
             }
             return min(minutes, max(0, span))
         }
-        let done = Int((Double(minutes) * Double(t.percentComplete) / 100).rounded())
+        let done = Int.clamped(Double(minutes) * Double(t.percentComplete) / 100)
         var total = 0.0, actual = 0.0, before = 0
         for (n, rate) in rates.enumerated() {
             let upTo = n == rates.count - 1 ? minutes : work(until: rate.until ?? finish)

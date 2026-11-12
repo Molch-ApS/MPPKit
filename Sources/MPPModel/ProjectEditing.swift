@@ -515,7 +515,7 @@ extension Project {
             guard let s = t.start, let f = t.finish, s < date, t.percentComplete < 100 else { continue }
             let wt = time(t)
             let total = wt.minutes(from: s, to: f)
-            let done = f <= date ? 100 : (total == 0 ? 100 : Int((Double(wt.minutes(from: s, to: date)) / Double(total) * 100).rounded(.down)))
+            let done = f <= date ? 100 : (total == 0 ? 100 : Int.clamped(Double(wt.minutes(from: s, to: date)) / Double(total) * 100, .down))
             let pct = partial ? done : (done == 100 ? 100 : 0)
             guard pct > t.percentComplete else { continue }
             tasks[i].percentComplete = pct

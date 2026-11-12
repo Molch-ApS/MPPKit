@@ -45,6 +45,10 @@ public final class CFBFile {
         0xBE, 0x11, 0x00, 0xC0, 0x4F, 0xB6, 0xFA, 0xF1,
     ]
 
+    /// The largest file read (1 GB). Project's own files are far smaller, and
+    /// everything else here is bounded by the file's size.
+    public static let maxFileBytes = 1 << 30
+
     /// Sector allocation table, indexed by sector id.
     private let fat: [UInt32]
     private let miniFAT: [UInt32]
@@ -70,6 +74,7 @@ public final class CFBFile {
 
         // ---- file header ([MS-CFB] 2.2) ----------------------------------
         guard bytes.count >= 512 else { throw CFBError.truncated("file header") }
+        guard bytes.count <= CFBFile.maxFileBytes else { throw CFBError.malformed("file larger than 1 GB") }
         let signature: [UInt8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]
         guard Array(bytes[0..<8]) == signature else { throw CFBError.notCompoundFile }
 
@@ -82,7 +87,10 @@ public final class CFBFile {
         }
         let sectorSize = 1 << Int(sectorShift)
 
+        // [MS-CFB] 2.2: the mini sector shift MUST be 6 (64 bytes); the stream
+        // reader assumes it.
         guard let miniShift = r.u16(at: 32) else { throw CFBError.truncated("header") }
+        guard miniShift == 6 else { throw CFBError.malformed("mini sector shift \(miniShift), not 6") }
         let miniSectorSize = 1 << Int(miniShift)
 
         let majorVersion = r.u16(at: 26) ?? 3
@@ -95,6 +103,8 @@ public final class CFBFile {
               let firstDIFATSector = r.u32(at: 68),
               let numDIFATSectors = r.u32(at: 72)
         else { throw CFBError.truncated("file header") }
+        // [MS-CFB] 2.2: the cutoff MUST be 4096.
+        guard cutoff == 4096 else { throw CFBError.malformed("mini stream cutoff \(cutoff), not 4096") }
 
         self.fileBytes = bytes
         self.majorVersion = majorVersion
@@ -103,9 +113,11 @@ public final class CFBFile {
         self.miniStreamCutoff = Int(cutoff)
 
         let sectorCount = max(0, (bytes.count - sectorSize) / sectorSize)
+        // Ids are compared before they become Int: a u32 past 2³¹ doesn't fit
+        // where Int is 32 bits (the web core), and Int() of it traps there.
         func sectorSlice(_ id: UInt32) -> ArraySlice<UInt8>? {
+            guard id < sectorCount else { return nil }
             let sid = Int(id)
-            guard sid >= 0, sid < sectorCount else { return nil }
             let start = (sid + 1) * sectorSize
             guard start + sectorSize <= bytes.count else { return nil }
             return bytes[start..<start + sectorSize]
@@ -119,12 +131,15 @@ public final class CFBFile {
             fatSectorIDs.append(v)
         }
         // Follow the DIFAT chain only if the header's inline list is full;
-        // otherwise there are no DIFAT sectors to read.
+        // otherwise there are no DIFAT sectors to read. The chain is bounded by
+        // the sectors the file has and may not visit one twice; its count in
+        // the header isn't trusted.
         if fatSectorIDs.count == 109, numDIFATSectors > 0, firstDIFATSector != CFBSentinel.endOfChain {
             let difatEntriesPerSector = sectorSize / 4 - 1
             var current = firstDIFATSector
-            var guardCount = 0
-            while current != CFBSentinel.endOfChain, guardCount <= Int(numDIFATSectors) + 1 {
+            var seen = Set<UInt32>()
+            while current != CFBSentinel.endOfChain {
+                guard seen.insert(current).inserted else { throw CFBError.malformed("cycle in the DIFAT chain at \(current)") }
                 guard let slice = sectorSlice(current) else { break }
                 let s = BinaryReader(Array(slice))
                 for i in 0..<difatEntriesPerSector {
@@ -133,9 +148,9 @@ public final class CFBFile {
                     fatSectorIDs.append(v)
                 }
                 current = s.u32(at: difatEntriesPerSector * 4) ?? CFBSentinel.endOfChain
-                guardCount += 1
             }
         }
+        guard fatSectorIDs.count <= sectorCount else { throw CFBError.malformed("more FAT sectors than the file has") }
 
         // ---- FAT ---------------------------------------------------------
         var fat: [UInt32] = []
@@ -150,7 +165,7 @@ public final class CFBFile {
         }
         // A file that declares FAT sectors we could not read has to fail loudly:
         // silently short FATs turn into wrong stream contents.
-        if fat.count < Int(numFATSectors) * (sectorSize / 4) && !fatSectorIDs.isEmpty {
+        if UInt64(fat.count) < UInt64(numFATSectors) * UInt64(sectorSize / 4) && !fatSectorIDs.isEmpty {
             throw CFBError.truncated("FAT sectors")
         }
         self.fat = fat
@@ -167,7 +182,7 @@ public final class CFBFile {
                       current != CFBSentinel.difat else {
                     throw CFBError.malformed("chain hit a reserved sector id")
                 }
-                guard Int(current) < table.count else {
+                guard current < table.count else {
                     throw CFBError.malformed("chain sector \(current) beyond the allocation table")
                 }
                 guard seen.insert(current).inserted else {
@@ -220,16 +235,15 @@ public final class CFBFile {
         if rootEntry.startSector != CFBSentinel.endOfChain, rootEntry.streamSize > 0 {
             let raw = (try? readChain(start: rootEntry.startSector, table: fat,
                                       unit: sectorSize, sectorAt: sectorSlice)) ?? []
-            miniStream = Array(raw.prefix(Int(rootEntry.streamSize)))
+            miniStream = Array(raw.prefix(Int(clamping: rootEntry.streamSize)))
         } else {
             miniStream = []
         }
         self.miniStream = miniStream
 
         func miniSectorSlice(_ id: UInt32) -> ArraySlice<UInt8>? {
-            let sid = Int(id)
-            let start = sid * miniSectorSize
-            guard sid >= 0, start + miniSectorSize <= miniStream.count else { return nil }
+            guard id < miniStream.count / miniSectorSize else { return nil }
+            let start = Int(id) * miniSectorSize
             return miniStream[start..<start + miniSectorSize]
         }
 
@@ -241,7 +255,7 @@ public final class CFBFile {
         var visited = Set<UInt32>()
         func collectSiblings(_ index: UInt32, into out: inout [UInt32], depth: Int) {
             guard index != CFBSentinel.noStream,
-                  Int(index) < entries.count,
+                  index < entries.count,
                   depth < 512,
                   visited.insert(index).inserted else { return }
             let e = entries[Int(index)]
@@ -250,7 +264,16 @@ public final class CFBFile {
             collectSiblings(e.rightSibling, into: &out, depth: depth + 1)
         }
 
-        func populate(_ storage: CFBStorage, childIndex: UInt32) {
+        // Every stream is read here, and many entries can name one chain: what
+        // they add up to is held to a few times the file, so 10,000 entries over
+        // one 10 MB chain fail rather than ask for 100 GB. Storages nest at most
+        // 64 deep, far past what Project writes, so a crafted file can't run the
+        // stack out.
+        // Written so it can't overflow where Int is 32 bits.
+        let streamBudget = min(bytes.count, (Int.max - (1 << 20)) / 4) * 4 + (1 << 20)
+        var streamBytes = 0
+        func populate(_ storage: CFBStorage, childIndex: UInt32, depth: Int) throws {
+            guard depth < 64 else { throw CFBError.malformed("storages nested more than 64 deep") }
             var indices: [UInt32] = []
             collectSiblings(childIndex, into: &indices, depth: 0)
             for index in indices {
@@ -258,8 +281,13 @@ public final class CFBFile {
                 switch e.objectType {
                 case .storage:
                     let sub = storage.addStorage(e.name)
-                    populate(sub, childIndex: e.child)
+                    try populate(sub, childIndex: e.child, depth: depth + 1)
                 case .stream:
+                    // A stream larger than the whole file is no damage to read
+                    // around: the file is wrong.
+                    guard e.streamSize <= UInt64(bytes.count) else {
+                        throw CFBError.malformed("stream \(e.name) larger than the file")
+                    }
                     // Called as a static helper with explicit locals so this
                     // nested walk does not capture `self` before `root` — the
                     // last stored property — has been initialised.
@@ -268,6 +296,10 @@ public final class CFBFile {
                                                             fat: fat, miniFAT: miniFAT,
                                                             miniStream: miniStream,
                                                             miniStreamCutoff: Int(cutoff))) ?? []
+                    guard data.count <= streamBudget - streamBytes else {
+                        throw CFBError.malformed("streams add up to far more than the file")
+                    }
+                    streamBytes += data.count
                     storage.addStream(e.name, data)
                 default:
                     continue
@@ -275,7 +307,7 @@ public final class CFBFile {
             }
         }
 
-        populate(rootStorage, childIndex: rootEntry.child)
+        try populate(rootStorage, childIndex: rootEntry.child, depth: 0)
         self.root = rootStorage
         self.rootCLSID = rootEntry.clsid
     }
@@ -292,15 +324,18 @@ public final class CFBFile {
                                        miniFAT: [UInt32],
                                        miniStream: [UInt8],
                                        miniStreamCutoff: Int) throws -> [UInt8] {
+        // A stream can't hold more than the file: and Int() of a larger u64
+        // would trap.
+        guard e.streamSize <= UInt64(fileBytes.count) else { throw CFBError.malformed("stream larger than the file") }
         let size = Int(e.streamSize)
         if size == 0 { return [] }
 
         let miniSectorSize = 64
 
         func sectorSlice(_ id: UInt32) -> ArraySlice<UInt8>? {
-            let sid = Int(id)
-            let start = (sid + 1) * sectorSize
-            guard sid >= 0, start + sectorSize <= fileBytes.count else { return nil }
+            guard id < fileBytes.count / sectorSize else { return nil }
+            let start = (Int(id) + 1) * sectorSize
+            guard start + sectorSize <= fileBytes.count else { return nil }
             return fileBytes[start..<start + sectorSize]
         }
 
@@ -310,7 +345,7 @@ public final class CFBFile {
             var seen = Set<UInt32>()
             var current = e.startSector
             while current != CFBSentinel.endOfChain {
-                guard Int(current) < miniFAT.count else {
+                guard current < miniFAT.count else {
                     throw CFBError.malformed("mini chain beyond the mini FAT")
                 }
                 guard seen.insert(current).inserted else {
@@ -331,7 +366,7 @@ public final class CFBFile {
         var seen = Set<UInt32>()
         var current = e.startSector
         while current != CFBSentinel.endOfChain {
-            guard Int(current) < fat.count else {
+            guard current < fat.count else {
                 throw CFBError.malformed("chain sector beyond the FAT")
             }
             guard seen.insert(current).inserted else {

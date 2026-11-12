@@ -38,7 +38,7 @@ extension MPP {
         var out: [PayRate] = []
         for n in 0..<Int(min(count, 25)) {
             let o = 16 + n * 44
-            guard let std = r.f64(at: o), let ot = r.f64(at: o + 16), let cpu = r.f64(at: o + 32),
+            guard let std = r.f64(at: o)?.fromFile, let ot = r.f64(at: o + 16)?.fromFile, let cpu = r.f64(at: o + 32)?.fromFile,
                   let until = r.u32(at: o + 40) else { break }
             out.append(PayRate(standardPerHour: std, overtimePerHour: ot, costPerUse: cpu / 100,
                                until: until >= openRateEnd ? nil : MPPTime.date(days: Int(until / 14_400), tenths: Int(until % 14_400))))

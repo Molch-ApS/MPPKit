@@ -316,7 +316,7 @@ if command == "schedcheck" {
     // Tasks whose saved span is longer than their duration: split in Project.
     let stretched = stored.tasks.filter { t in
         guard !t.summary, !t.manual, let s = t.start, let f = t.finish else { return false }
-        return time(t).minutes(from: s, to: f) > Int((t.durationDays * Double(stored.minutesPerDay)).rounded()) + 1
+        return time(t).minutes(from: s, to: f) > Int.clamped(t.durationDays * Double(stored.minutesPerDay)) + 1
     }
     let a = stored.criticalUIDs(), b = mine.criticalUIDs()
     let leaves = stored.tasks.filter { !$0.summary }.count
