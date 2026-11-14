@@ -76,4 +76,33 @@ final class ProjectRulesTests: XCTestCase {
         XCTAssertEqual(p.tasks[1].start, d(11, 4, 8))
         XCTAssertEqual(p.totalFloatMinutes(uid: 1), 0)
     }
+
+    // MARK: Actual Finish
+
+    /// The duration an actual finish gives is counted in the task's own
+    /// working time: three mornings on a mornings-only calendar are three
+    /// half days.
+    func testActualFinishCountsTheTasksCalendar() throws {
+        var p = plan([task(1, 5) { $0.calendar = "Mornings" }])
+        var mornings = ProjectCalendar(name: "Mornings")
+        for weekday in 2...6 { mornings.week[weekday] = [480...720] }
+        p.calendars = [mornings]
+        try Scheduler.schedule(&p)
+        p.setActualFinish(uid: 1, d(11, 4, 12))
+        XCTAssertEqual(p.tasks[0].durationDays, 1.5)
+        XCTAssertEqual(p.tasks[0].percentComplete, 100)
+        try Scheduler.schedule(&p)
+        XCTAssertEqual(p.tasks[0].finish, d(11, 4, 12))
+    }
+
+    /// An elapsed duration counts every hour: a day and a night are 24 hours,
+    /// three 8-hour days.
+    func testActualFinishOfAnElapsedTask() throws {
+        var p = plan([task(1, 6) { $0.durationUnits = "ed" }])
+        try Scheduler.schedule(&p)
+        p.setActualFinish(uid: 1, d(11, 3, 8))
+        XCTAssertEqual(p.tasks[0].durationDays, 3)
+        try Scheduler.schedule(&p)
+        XCTAssertEqual(p.tasks[0].finish, d(11, 3, 8))
+    }
 }

@@ -436,7 +436,9 @@ extension Project {
     }
 
     /// Project's Actual Finish: the task is complete on that day, its duration
-    /// what it took. Nil reopens a finished task.
+    /// what it took, counted in the task's own working time (its calendar,
+    /// its resources'), or in wall-clock time for an elapsed duration, less
+    /// any gap it was split by. Nil reopens a finished task.
     public mutating func setActualFinish(uid: Int, _ date: Date?) {
         guard let i = tasks.firstIndex(where: { $0.uid == uid }), let start = tasks[i].start else { return }
         guard let date else {
@@ -445,7 +447,10 @@ extension Project {
             return
         }
         guard date >= start else { return }
-        let minutes = WorkingTime(calendar: calendar).minutes(from: start, to: date)
+        let t = tasks[i]
+        var minutes = t.isElapsed ? Int.clamped(date.timeIntervalSince(start) / 60)
+            : workingTimes()(t).minutes(from: start, to: date)
+        if t.splitMinutes > 0, minutes > t.splitMinutes { minutes -= t.splitMinutes }
         tasks[i].durationDays = Double(minutes) / Double(max(1, minutesPerDay))
         tasks[i].actualStart = tasks[i].actualStart ?? start
         tasks[i].actualFinish = date
