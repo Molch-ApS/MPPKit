@@ -107,4 +107,65 @@ final class CostTests: XCTestCase {
         XCTAssertEqual(back.tasks.first?.fixedCostAccrual, "end")
         XCTAssertEqual(back.resources.first?.costRateTables.first?.first?.standardPerHour, 80)
     }
+
+    private static let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .deletingLastPathComponent().deletingLastPathComponent()
+
+    /// A new file (the blank template has no resource) keeps tables B to E,
+    /// in the bytes Project writes: count, then 44 bytes a rate, the last
+    /// one open to 31 Dec 2049.
+    func testRateTablesAToEReachANewFile() throws {
+        let template = [UInt8](try Data(contentsOf: Self.root.appendingPathComponent("Samples/Blank-Template.mpp")))
+        var p = plan([PayRate(standardPerHour: 80, costPerUse: 25)], [task(1, "work", 2)])
+        p.resources[0].costRateTables = [
+            [PayRate(standardPerHour: 80, costPerUse: 25)],
+            [PayRate(standardPerHour: 50, overtimePerHour: 75, until: d(2026, 11, 3, 8)), PayRate(standardPerHour: 60)],
+            [], [PayRate(standardPerHour: 0)], [PayRate(standardPerHour: 0, costPerUse: 10)],
+        ]
+        p.assignments[0].costRateTable = 1
+        try Scheduler.schedule(&p)
+        p.recalculateCosts()
+        let bytes = try MPP14Writer(template: template).build(p)
+        let back = try MPP14File(bytes: bytes).readProject()
+        let tables = try XCTUnwrap(back.resources.first?.costRateTables)
+        XCTAssertEqual(tables, [p.resources[0].costRateTables[0], p.resources[0].costRateTables[1], [], [],
+                                p.resources[0].costRateTables[4]])
+        XCTAssertEqual(back.assignments.first?.costRateTable, 1)
+        XCTAssertEqual(back.assignments.first?.cost, p.assignments[0].cost)
+
+        let f = try MPP14File(bytes: bytes)
+        let k = MPP14File.EntityClass(root: f.root, storage: "\(MPP.projectStorage)/TBkndRsc", metaSize: MPP.resourceMetaSize,
+                                      meta2Size: 53, propsKey: MPP.PropsKey.resourceFieldMap, props: f.props)
+        let b = try XCTUnwrap(k.varBytes(1, MPP.ResourceField.costRateTables[1]))
+        XCTAssertEqual(b.count, 16 + 2 * 44)
+        XCTAssertEqual(Array(b.prefix(6)), [2, 0, 4, 0, 16, 0])
+        XCTAssertEqual(Array(b.suffix(4)), [0xF7, 0x2A, 0xB1, 0x14])
+        XCTAssertNil(k.varBytes(1, MPP.ResourceField.costRateTables[2]))
+        XCTAssertTrue(f.conformanceIssues().isEmpty, "\(f.conformanceIssues().prefix(3))")
+    }
+
+    /// Project's own rate tables (several rates, shown per minute or per
+    /// day) come back as Project saved them, and an open-ended rate reads
+    /// as open.
+    func testProjectsRateTablesSurviveASave() throws {
+        let dir = ProcessInfo.processInfo.environment["MPP_CORPUS"].map { URL(fileURLWithPath: $0) }
+            ?? Self.root.appendingPathComponent("Corpus")
+        guard let data = try? Data(contentsOf: dir.appendingPathComponent("mpp14costratetable.mpp")) else {
+            throw XCTSkip("no mpp14costratetable.mpp — run Tools/ci/fetch-corpus.sh")
+        }
+        let bytes = [UInt8](data)
+        let read = try MPP14File(bytes: bytes).readProject()
+        let three = try XCTUnwrap(read.resources.first { $0.name == "Resource Three" })
+        XCTAssertEqual(three.costRateTables.count, 5)
+        XCTAssertEqual(three.costRateTables[1].map(\.standardPerHour), [35, 6.25])
+        XCTAssertNotNil(three.costRateTables[1][0].until)
+        XCTAssertNil(three.costRateTables[1][1].until)
+        let back = try MPP14File(bytes: try MPP14Writer(template: bytes).build(read)).readProject()
+        XCTAssertEqual(back.resources.map(\.costRateTables), read.resources.map(\.costRateTables))
+        var edited = read
+        let i = try XCTUnwrap(edited.resources.firstIndex { $0.name == "Resource Two" })
+        edited.resources[i].costRateTables[2] = [PayRate(standardPerHour: 99)]
+        let again = try MPP14File(bytes: try MPP14Writer(template: bytes).build(edited)).readProject()
+        XCTAssertEqual(again.resources.map(\.costRateTables), edited.resources.map(\.costRateTables))
+    }
 }

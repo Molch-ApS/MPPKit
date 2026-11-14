@@ -642,7 +642,8 @@ public final class MPP14File {
     }
 
     /// The assignments, and each split task's gaps as its first assignment's
-    /// planned work lays them out (a task with no resource has a hidden one).
+    /// planned work lays them out (a task with no resource has a hidden one),
+    /// after the work it has done.
     private func readAssignments() -> ([Assignment], [Int: [TaskSplit]]) {
         let k = EntityClass(root: root, storage: "\(MPP.projectStorage)/TBkndAssn",
                             metaSize: MPP.assignmentMetaSize, meta2Size: 53,
@@ -654,7 +655,9 @@ public final class MPP14File {
                   let resourceUID = k.i32(i, MPP.AssignmentField.resourceUniqueID) else { continue }
             if taskUID != 0, splits[Int(taskUID)] == nil, let auid = k.u32(i, MPP.AssignmentField.uniqueID),
                let planned = k.varBytes(Int(auid), MPP.AssignmentField.plannedWork) {
-                let gaps = MPP.splitGaps(planned)
+                // Under way, the planned work starts where the done part stops.
+                let done = k.varBytes(Int(auid), MPP.AssignmentField.actualWorkData).map(MPP.actualWorkMinutes) ?? 0
+                let gaps = MPP.splitGaps(planned, done: done)
                 if !gaps.isEmpty { splits[Int(taskUID)] = gaps }
             }
             // Negative resource uids are Project's "unassigned" placeholders.

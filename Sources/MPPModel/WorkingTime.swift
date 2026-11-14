@@ -32,6 +32,11 @@ public struct WorkingTime: Sendable {
     /// Non-working day numbers from exceptions.
     public var nonWorkingDays: Set<Int> { Set(exceptionDays.filter { $0.value.isEmpty }.keys) }
 
+    /// Calendars worked side by side, each by its own (a task's resources):
+    /// work starts when the first can start and is done when the last is.
+    /// Empty for a single calendar.
+    private let parts: [WorkingTime]
+
     /// A safety bound on day-by-day scans: a calendar with no working time at
     /// all must not loop forever.
     private static let scanLimit = 36_600
@@ -62,6 +67,76 @@ public struct WorkingTime: Sendable {
             for d in first...last { days[d] = ranges }
         }
         self.exceptionDays = days
+        self.parts = []
+    }
+
+    private init(windows: [Int: [ClosedRange<Int>]], exceptionDays: [Int: [ClosedRange<Int>]], parts: [WorkingTime]) {
+        self.windows = windows
+        self.exceptionDays = exceptionDays
+        self.parts = parts
+    }
+
+    /// Several calendars worked side by side, as a task's resources each work
+    /// their own: a stretch of work starts when the first can start and ends
+    /// when the last is done, and a day's working ranges are all of theirs.
+    public init(sideBySide calendars: [WorkingTime]) {
+        let parts = calendars.flatMap { $0.parts.isEmpty ? [$0] : $0.parts }
+        if parts.count == 1 {
+            self = parts[0]
+            return
+        }
+        var windows: [Int: [ClosedRange<Int>]] = [:]
+        for weekday in 1...7 {
+            let ranges = Self.union(parts.map { $0.windows[weekday] ?? [] })
+            if !ranges.isEmpty { windows[weekday] = ranges }
+        }
+        var days: [Int: [ClosedRange<Int>]] = [:]
+        for day in Set(parts.flatMap(\.exceptionDays.keys)) {
+            let date = MPPTime.adding(days: day, to: MPPTime.epoch)
+            days[day] = Self.union(parts.map { $0.ranges(on: date) })
+        }
+        self.init(windows: windows, exceptionDays: days, parts: parts)
+    }
+
+    /// The working time two calendars share: a task's own calendar and its
+    /// resource's, which Project schedules the task in together.
+    public func intersecting(_ other: WorkingTime) -> WorkingTime {
+        if !parts.isEmpty { return WorkingTime(sideBySide: parts.map { $0.intersecting(other) }) }
+        if !other.parts.isEmpty { return WorkingTime(sideBySide: other.parts.map { intersecting($0) }) }
+        var windows: [Int: [ClosedRange<Int>]] = [:]
+        for weekday in 1...7 {
+            let ranges = Self.intersection(self.windows[weekday] ?? [], other.windows[weekday] ?? [])
+            if !ranges.isEmpty { windows[weekday] = ranges }
+        }
+        var days: [Int: [ClosedRange<Int>]] = [:]
+        for day in Set(exceptionDays.keys).union(other.exceptionDays.keys) {
+            let date = MPPTime.adding(days: day, to: MPPTime.epoch)
+            days[day] = Self.intersection(ranges(on: date), other.ranges(on: date))
+        }
+        return WorkingTime(windows: windows, exceptionDays: days, parts: [])
+    }
+
+    private static func union(_ lists: [[ClosedRange<Int>]]) -> [ClosedRange<Int>] {
+        var out: [ClosedRange<Int>] = []
+        for r in lists.joined().sorted(by: { $0.lowerBound < $1.lowerBound }) {
+            if let last = out.last, r.lowerBound <= last.upperBound {
+                out[out.count - 1] = last.lowerBound...max(last.upperBound, r.upperBound)
+            } else {
+                out.append(r)
+            }
+        }
+        return out
+    }
+
+    private static func intersection(_ a: [ClosedRange<Int>], _ b: [ClosedRange<Int>]) -> [ClosedRange<Int>] {
+        var out: [ClosedRange<Int>] = []
+        for x in a {
+            for y in b {
+                let lo = max(x.lowerBound, y.lowerBound), hi = min(x.upperBound, y.upperBound)
+                if hi > lo { out.append(lo...hi) }
+            }
+        }
+        return out.sorted { $0.lowerBound < $1.lowerBound }
     }
 
     /// The working ranges of the wall-clock day containing `day`.
@@ -72,11 +147,13 @@ public struct WorkingTime: Sendable {
 
     /// Working minutes in a normal week.
     public var minutesPerWeek: Int {
-        windows.values.joined().reduce(0) { $0 + $1.upperBound - $1.lowerBound }
+        if !parts.isEmpty { return parts.map(\.minutesPerWeek).max() ?? 0 }
+        return windows.values.joined().reduce(0) { $0 + $1.upperBound - $1.lowerBound }
     }
 
     /// Working minutes between two instants.
     public func minutes(from start: Date, to finish: Date) -> Int {
+        if !parts.isEmpty { return parts.map { $0.minutes(from: start, to: finish) }.max() ?? 0 }
         guard finish > start else { return 0 }
         var total = 0
         var day = MPPTime.startOfDay(start)
@@ -98,6 +175,7 @@ public struct WorkingTime: Sendable {
     /// The instant reached after `minutes` of working time from `start`.
     /// The result may sit on the end of a working range.
     public func advance(_ start: Date, minutes: Int) -> Date {
+        if !parts.isEmpty { return parts.map { $0.advance(start, minutes: minutes) }.max() ?? start }
         var remaining = max(0, minutes)
         var day = MPPTime.startOfDay(start)
         let startDay = day, startMinute = MPPTime.minuteOfDay(start)
@@ -118,6 +196,7 @@ public struct WorkingTime: Sendable {
     /// The instant `minutes` of working time before `finish`. The result may
     /// sit on the start of a working range.
     public func retreat(_ finish: Date, minutes: Int) -> Date {
+        if !parts.isEmpty { return parts.map { $0.retreat(finish, minutes: minutes) }.min() ?? finish }
         var remaining = max(0, minutes)
         var day = MPPTime.startOfDay(finish)
         let finishDay = day, finishMinute = MPPTime.minuteOfDay(finish)
@@ -139,6 +218,7 @@ public struct WorkingTime: Sendable {
     /// range is not one: Project rolls 12:00 on to 13:00, and the end of the
     /// day on to the next morning.
     public func nextWorkingMoment(_ point: Date) -> Date {
+        if !parts.isEmpty { return parts.map { $0.nextWorkingMoment(point) }.min() ?? point }
         var day = MPPTime.startOfDay(point)
         let pointDay = day, pointMinute = MPPTime.minuteOfDay(point)
         for _ in 0..<Self.scanLimit {
@@ -154,6 +234,7 @@ public struct WorkingTime: Sendable {
     /// The last working instant at or before `point` — the end of the most
     /// recent range that has finished by then.
     public func previousWorkingMoment(_ point: Date) -> Date? {
+        if !parts.isEmpty { return parts.compactMap { $0.previousWorkingMoment(point) }.max() }
         var day = MPPTime.startOfDay(point)
         let pointDay = day, pointMinute = MPPTime.minuteOfDay(point)
         for _ in 0..<3_700 {

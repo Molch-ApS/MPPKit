@@ -392,6 +392,8 @@ private final class Session {
 
         let tenthsPerDay = Double(project.tenthsPerDay)
         let time = WorkingTime(calendar: project.calendar ?? templateStandard)
+        // Each task's own working time, its resources' calendars included.
+        let timeOfTask: (MPPModel.ProjectTask) -> WorkingTime = project.calendar == nil ? { _ in time } : project.workingTimes()
         let now = options.now()
 
         // GUIDs the file links records by.
@@ -676,10 +678,11 @@ private final class Session {
             }
             if percent > 0 {
                 e.ts(F.actualStart, start)
-                let point = percent == 100 ? finish : time.advance(start, minutes: actualTenths / 10)
+                let stop = percent == 100 || task == nil ? nil
+                    : Self.stopAndResume(task!, start: start, doneTenths: actualTenths, time: timeOfTask(task!))
                 e.ts(F.actualFinish, percent == 100 ? finish : nil)
-                e.ts(F.stop, point)
-                e.ts(F.resume, point)
+                e.ts(F.stop, stop?.stop ?? finish)
+                e.ts(F.resume, stop?.resume ?? finish)
             } else {
                 // Started on a given day with nothing done yet: Project keeps
                 // the actual start alone.
@@ -953,6 +956,7 @@ private final class Session {
         rscOwned.formUnion(W.Rsc.baselineBudget.flatMap { [$0.work, $0.cost] })
         rscOwned.formUnion(W.Rsc.baselineTimephased)
         rscOwned.formUnion([RF.name, RF.initials, RF.emailAddress])
+        rscOwned.formUnion(RF.costRateTables)
         rscOwned.formUnion(MPP.ResourceCustomField.text + MPP.ResourceCustomField.number
                            + MPP.ResourceCustomField.date + MPP.ResourceCustomField.flag)
         var ownRsc: [Int: Row] = [:]
@@ -991,6 +995,13 @@ private final class Session {
                     extra.append((W.Rsc.baselineBudget[slot].cost, W.unsetDouble))
                 }
             }
+            // Cost rate tables: A whenever the resource is paid, B to E when
+            // they hold more than Project's default (one rate of nothing).
+            for (n, rates) in res.costRateTables.prefix(RF.costRateTables.count).enumerated() where !rates.isEmpty {
+                let isDefault = rates.count == 1 && rates[0].standardPerHour == 0 && rates[0].overtimePerHour == 0
+                    && rates[0].costPerUse == 0
+                if n == 0 || !isDefault { extra.append((RF.costRateTables[n], MPP.encodePayRates(rates))) }
+            }
             let own = project.resourceCalendars.first { $0.resourceUID == res.uid && $0.uid == res.calendarUID }
             let calUID = calendars.addResourceCalendar(resourceUID: res.uid, guid: res.guid, base: own?.baseCalendarUID,
                                                        calendar: own)
@@ -1023,6 +1034,11 @@ private final class Session {
                 for (n, v) in res.text where was.text[n] == v {
                     Self.keepUnchanged(&extra, [MPP.ResourceCustomField.text[n - 1]], from: mine)
                 }
+                // Unchanged rate tables keep Project's bytes (and the units they
+                // are shown in).
+                if res.costRateTables == was.costRateTables {
+                    Self.keepUnchanged(&extra, RF.costRateTables, from: mine)
+                }
                 for slot in res.baselines.projectSlots.keys where res.baselines[slot] == was.baselines[slot] {
                     var fields = [MPP14File.resourceBaselineWork[slot], MPP14File.resourceBaselineCost[slot]]
                     if slot < W.Rsc.baselineBudget.count {
@@ -1048,7 +1064,7 @@ private final class Session {
 
         // ---- assignments ----------------------------------------------------------
         try writeAssignments(project, eff: eff, pct: pct, children: children, byUID: byUID,
-                             time: time, now: now, keptWork: keptWork, assignmentWork: assignmentWork)
+                             time: timeOfTask, now: now, keptWork: keptWork, assignmentWork: assignmentWork)
 
         writeFieldAliases(project)
         writeEntryTable(project)
@@ -1403,7 +1419,8 @@ private final class Session {
 
     func writeAssignments(_ project: Project, eff: [Int: (start: Date, finish: Date, tenths: Int)],
                           pct: [Int: Int], children: [Int: [Int]], byUID: [Int: MPPModel.ProjectTask],
-                          time: WorkingTime, now: Date, keptWork: [Bool], assignmentWork: [Double]) throws {
+                          time taskTime: (MPPModel.ProjectTask) -> WorkingTime, now: Date, keptWork: [Bool],
+                          assignmentWork: [Double]) throws {
         let t = try assignmentTable()
         let A = MPP.AssignmentField.self
         func taskUID(_ row: Row) -> UInt32? {
@@ -1483,6 +1500,7 @@ private final class Session {
             let uid = n + 1
             let empty = spec.resource == W.nullResourceUID
             let task = byUID[spec.task]!
+            let time = taskTime(task)
             let (start, finish, tenths) = eff[spec.task]!
             let ownRow = own["\(spec.task)/\(spec.resource)"]
             // The work the file holds, kept with the fields that follow from
@@ -1537,6 +1555,7 @@ private final class Session {
 
             let p = pct[spec.task] ?? 0
             var reached = start, remainingWork = work, remainingTenths = tenths
+            var resumes: Date?, done = 0
             if p > 0 {
                 remainingWork = work * Double(100 - p) / 100
                 if !keepsWork {
@@ -1546,7 +1565,10 @@ private final class Session {
                 }
                 let elapsed = Int.clamped(Double(tenths) * Double(p) / 100)
                 remainingTenths = tenths - elapsed
-                reached = p == 100 ? finish : time.advance(start, minutes: elapsed / 10)
+                let stop = p == 100 ? nil : Self.stopAndResume(task, start: start, doneTenths: elapsed, time: time)
+                reached = stop?.stop ?? finish
+                resumes = stop?.resume
+                done = stop?.done ?? 0
                 if !keepsWork {
                     e.ts(A.actualStart, start)
                     e.bit(A.actualStart, true)
@@ -1560,7 +1582,7 @@ private final class Session {
             e.bit(A.finished, p == 100)
             if !keepsWork {
                 e.ts(A.start, start)
-                e.ts(A.resume, reached)
+                e.ts(A.resume, resumes ?? reached)
                 e.ts(A.stop, reached)
                 e.ts(A.finish, finish)
             }
@@ -1580,10 +1602,12 @@ private final class Session {
                     // duration × 8 at +24.
                     if p == 100 {
                         payload = Self.remainingAt100(units: spec.units, work: work, tenths: tenths)
-                    } else if p == 0, tenths > 0, !task.splits.isEmpty {
+                    } else if tenths > 0, task.splits.contains(where: { $0.workMinutes >= done }) {
                         // A split task moved or changed: its work around the
-                        // same gaps, as Project lays it out.
-                        payload = MPP.splitPlannedWork(minutes: tenths / 10, units: spec.units, gaps: task.splits)
+                        // same gaps, as Project lays it out. Under way, the
+                        // work still to do, from where the done part stops.
+                        payload = MPP.splitPlannedWork(minutes: tenths / 10, units: spec.units, gaps: task.splits,
+                                                       done: done)
                     } else {
                         // A zero-work row (a milestone) carries no units, as Project writes it.
                         payload.replaceSubrange(8..<16, with: le(tenths == 0 ? 0 : spec.units * W.pctScale * 16))
@@ -1676,6 +1700,19 @@ private final class Session {
         for off in [16, 36] { b.replaceSubrange(off..<off + 8, with: le(work)) }
         for off in [24, 52] { b.replaceSubrange(off..<off + 4, with: le(UInt32(tenths * 8))) }
         return b
+    }
+
+    /// Where the done part of a task under way stops, where the rest resumes
+    /// (after a gap there, or at the next working moment) and its working
+    /// minutes done: a gap within a minute of `doneTenths` is where it stops.
+    static func stopAndResume(_ task: MPPModel.ProjectTask, start: Date, doneTenths: Int,
+                              time: WorkingTime) -> (stop: Date, resume: Date, done: Int) {
+        var done = doneTenths / 10
+        if let gap = task.splits.first(where: { abs($0.workMinutes - done) <= 1 }) { done = gap.workMinutes }
+        let before = task.splits.filter { $0.workMinutes < done }.reduce(0) { $0 + $1.idleMinutes }
+        let stop = time.advance(start, minutes: done + before)
+        let idle = task.splits.first { $0.workMinutes == done }?.idleMinutes ?? 0
+        return (stop, time.nextWorkingMoment(time.advance(stop, minutes: idle)), done)
     }
 
     /// Var 49 as Project leaves it once an assignment is complete.

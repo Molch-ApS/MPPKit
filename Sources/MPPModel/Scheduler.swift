@@ -23,7 +23,9 @@ import Foundation
 /// Handled: the four link types with lags and leads (working, elapsed or a
 /// percentage of the predecessor), links on summary tasks (they bind every
 /// task underneath), `SNET`, `MSO`, `FNET` and `MFO` constraints, deadlines,
-/// task calendars with changed-hours exceptions, elapsed durations, split
+/// task calendars with changed-hours exceptions, resource calendars (a task
+/// is worked in its work resources' calendars, within its own calendar, each
+/// resource by its own), elapsed durations, split
 /// tasks (their idle time is kept), milestones, manually scheduled tasks (left
 /// where they are, but given late dates) and summary roll-up. Progress follows
 /// Project: finished work has no float and holds nothing back; work under way
@@ -33,7 +35,8 @@ import Foundation
 /// A backward pass then gives every task its late start and finish (and so
 /// slack and the critical path), and as-late-as-possible tasks are moved to
 /// their late dates. The "no later than" constraints (`SNLT`, `FNLT`) cap the
-/// late dates; a schedule that breaks them is left to Project to report.
+/// late dates and, while the project honours constraint dates, hold the task
+/// at the date against its links (the late links then show negative slack).
 /// Resource levelling is not done.
 public enum Scheduler {
     public enum Failure: Error, CustomStringConvertible, Equatable {
@@ -53,14 +56,20 @@ public enum Scheduler {
     /// Recompute `start`, `finish` and summary durations in place.
     public static func schedule(_ project: inout Project) throws {
         let projectTime = WorkingTime(calendar: project.calendar)
-        var calendars: [String: WorkingTime] = ["Standard": projectTime]
-        if let std = project.calendar { calendars[std.name] = projectTime }
-        for cal in project.calendars { calendars[cal.name] = WorkingTime(calendar: cal) }
+        var calendars: Set<String> = ["Standard"]
+        if let std = project.calendar { calendars.insert(std.name) }
+        for cal in project.calendars { calendars.insert(cal.name) }
+        let ownTime = project.taskCalendarTimes()
+        let scheduledTime = project.workingTimes()
+        /// The working time a task's work is scheduled in: its resources'
+        /// calendars where they have their own, else its own or the project's.
         func time(for task: ProjectTask) throws -> WorkingTime {
-            guard let name = task.calendar else { return projectTime }
-            guard let t = calendars[name] else { throw Failure.unknownCalendar(name) }
-            return t
+            if let name = task.calendar, !calendars.contains(name) { throw Failure.unknownCalendar(name) }
+            return scheduledTime(task)
         }
+        /// The task's own calendar (or the project's): what its links' lags
+        /// are counted in.
+        func lagTime(for task: ProjectTask) -> WorkingTime { ownTime(task.calendar) }
 
         let index = Dictionary(uniqueKeysWithValues: project.tasks.enumerated().map { ($1.uid, $0) })
         var children: [Int: [Int]] = [:]
@@ -181,14 +190,15 @@ public enum Scheduler {
                 var start = projectStart
                 if task.constraint == "SNET", let d = task.constraintDate { start = min(start, d) }
                 var finishFloor: Date?
+                let lt = lagTime(for: task)
                 for rel in incoming[uid] ?? [] {
                     let pred = project.tasks[index[rel.predUID]!]
                     guard let ps = pred.start, let pf = pred.finish else { continue }
                     switch rel.type {
-                    case "SS": start = max(start, lagged(ps, rel, sign: 1, wt: wt))
-                    case "FF": finishFloor = max(finishFloor ?? .distantPast, lagged(pf, rel, sign: 1, wt: wt))
-                    case "SF": finishFloor = max(finishFloor ?? .distantPast, lagged(ps, rel, sign: 1, wt: wt))
-                    default: start = max(start, lagged(pf, rel, sign: 1, wt: wt))
+                    case "SS": start = max(start, lagged(ps, rel, sign: 1, wt: lt))
+                    case "FF": finishFloor = max(finishFloor ?? .distantPast, lagged(pf, rel, sign: 1, wt: lt))
+                    case "SF": finishFloor = max(finishFloor ?? .distantPast, lagged(ps, rel, sign: 1, wt: lt))
+                    default: start = max(start, lagged(pf, rel, sign: 1, wt: lt))
                     }
                 }
                 switch task.constraint {
@@ -235,6 +245,18 @@ public enum Scheduler {
                 if task.constraint == "MFO", let d = task.constraintDate {
                     finish = d
                     start = isMilestone ? d : before(d, span, task, wt)
+                }
+                // "No later than" wins over links when the project honours
+                // constraint dates (Project's default): the task is held at
+                // the date, and the late links show as negative slack.
+                if project.honorsConstraintDates, started == nil, let d = task.constraintDate {
+                    if task.constraint == "SNLT", start > d {
+                        start = d
+                        finish = isMilestone ? d : after(d, span, task, wt)
+                    } else if task.constraint == "FNLT", finish > d {
+                        finish = d
+                        start = isMilestone ? d : before(d, span, task, wt)
+                    }
                 }
                 task.start = start
                 task.finish = finish
@@ -295,7 +317,7 @@ public enum Scheduler {
                     guard let sls = e.start, let slf = e.finish else { continue }
                     // The lag runs in the successor's working time, back as
                     // forward: Project does both ways.
-                    let swt = try index[rel.succUID].map { try time(for: project.tasks[$0]) } ?? wt
+                    let swt = index[rel.succUID].map { lagTime(for: project.tasks[$0]) } ?? lagTime(for: task)
                     switch rel.type {
                     case "SS": startCap = min(startCap ?? .distantFuture, lagged(sls, rel, sign: -1, wt: swt))
                     case "FF": lf = min(lf, lagged(slf, rel, sign: -1, wt: swt))

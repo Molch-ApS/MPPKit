@@ -11,6 +11,7 @@
 import XCTest
 @testable import MPP14
 import MPPModel
+import MPPCFB
 
 /// Split tasks: where the gaps fall, read from an assignment's planned work,
 /// kept as the task moves, and written back the way Project lays them out.
@@ -67,5 +68,67 @@ final class SplitTaskTests: XCTestCase {
         q.tasks[j].durationDays = Double(gaps[0].workMinutes) / Double(q.minutesPerDay) + 0.5
         try Scheduler.schedule(&q)
         XCTAssertEqual(q.task(uid: split.uid)?.splits, [gaps[0]])
+    }
+
+    /// A task at 40 % whose predecessor got longer: the done part stays, the
+    /// rest resumes after the predecessor (#558). A new file keeps the gap:
+    /// the planned work starts where the done part stops, with the gap at its
+    /// head, and the task's Stop and Resume are either side of it.
+    func testInProgressSplitReachesANewFile() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let template = [UInt8](try Data(contentsOf: root.appendingPathComponent("Samples/Blank-Template.mpp")))
+        var p = Project(title: "Moves", start: MPPTime.date(2026, 1, 5, 8))
+        p.calendar = ProjectCalendar(name: "Standard")
+        for (uid, name, days) in [(1, "P", 2.0), (2, "S", 3.0), (3, "M", 1.0)] {
+            var t = ProjectTask(uid: uid, name: name)
+            t.durationDays = days; t.rowID = uid; t.outlineLevel = 1
+            p.tasks.append(t)
+        }
+        p.relations = [Relation(predUID: 1, succUID: 2), Relation(predUID: 1, succUID: 3)]
+        p.resources = [Resource(uid: 1, name: "Crew")]
+        p.assignments = [Assignment(taskUID: 2, resourceUID: 1)]
+        try Scheduler.schedule(&p)
+        p.tasks[1].percentComplete = 40
+        try Scheduler.schedule(&p)
+        p.tasks[0].durationDays = 4
+        try Scheduler.schedule(&p)
+        let s = try XCTUnwrap(p.task(uid: 2))
+        XCTAssertEqual(s.splits, [TaskSplit(workMinutes: 576, idleMinutes: 384)])
+
+        for plan in [p, { var q = p; q.assignments = []; return q }()] {
+            let bytes = try MPP14Writer(template: template).build(plan)
+            let file = try MPP14File(bytes: bytes)
+            let back = try file.readProject()
+            let b = try XCTUnwrap(back.task(uid: 2))
+            XCTAssertEqual(b.splits, s.splits, "\(plan.assignments.count) assignments")
+            XCTAssertEqual(b.percentComplete, 40)
+            XCTAssertEqual(b.start, s.start)
+            XCTAssertEqual(b.finish, s.finish)
+            XCTAssertTrue(file.conformanceIssues().isEmpty)
+            let k = MPP14File.EntityClass(root: file.root, storage: "\(MPP.projectStorage)/TBkndTask",
+                                          metaSize: MPP.taskMetaSize, meta2Size: MPP.taskMeta2Size,
+                                          propsKey: MPP.PropsKey.taskFieldMap, props: file.props)
+            let i = try XCTUnwrap(k.records.indices.first { k.u32($0, MPP.TaskField.uniqueID) == 2 })
+            XCTAssertEqual(k.timestamp(i, MPP.TaskField.stop), MPPTime.date(2026, 1, 8, 9, 36))
+            XCTAssertEqual(k.timestamp(i, MPP.TaskField.resume), MPPTime.date(2026, 1, 9, 8))
+            // Rescheduled after reading, it stays where it was.
+            var again = back
+            try Scheduler.schedule(&again)
+            XCTAssertEqual(again.task(uid: 2)?.finish, s.finish)
+            XCTAssertEqual(again.task(uid: 2)?.splits, s.splits)
+        }
+    }
+
+    func testPlannedWorkUnderWayStartsWithTheGap() {
+        let gap = TaskSplit(workMinutes: 576, idleMinutes: 384)
+        let bytes = MPP.splitPlannedWork(minutes: 1440, units: 1, gaps: [gap], done: 576)
+        XCTAssertEqual(BinaryReader(bytes).u16(at: 0), 2)
+        XCTAssertEqual(MPP.splitGaps(bytes, done: 576), [gap])
+        XCTAssertEqual(MPP.splitGaps(bytes), [])
+        // A gap further on is counted from the start of the task.
+        let later = TaskSplit(workMinutes: 960, idleMinutes: 480)
+        let both = MPP.splitPlannedWork(minutes: 1440, units: 1, gaps: [gap, later], done: 576)
+        XCTAssertEqual(MPP.splitGaps(both, done: 576), [gap, later])
     }
 }
