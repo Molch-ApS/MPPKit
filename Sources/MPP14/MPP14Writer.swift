@@ -392,6 +392,8 @@ private final class Session {
 
         let tenthsPerDay = Double(project.tenthsPerDay)
         let time = WorkingTime(calendar: project.calendar ?? templateStandard)
+        // Each task's own working time, its resources' calendars included.
+        let timeOfTask: (MPPModel.ProjectTask) -> WorkingTime = project.calendar == nil ? { _ in time } : project.workingTimes()
         let now = options.now()
 
         // GUIDs the file links records by.
@@ -677,7 +679,7 @@ private final class Session {
             if percent > 0 {
                 e.ts(F.actualStart, start)
                 let stop = percent == 100 || task == nil ? nil
-                    : Self.stopAndResume(task!, start: start, doneTenths: actualTenths, time: time)
+                    : Self.stopAndResume(task!, start: start, doneTenths: actualTenths, time: timeOfTask(task!))
                 e.ts(F.actualFinish, percent == 100 ? finish : nil)
                 e.ts(F.stop, stop?.stop ?? finish)
                 e.ts(F.resume, stop?.resume ?? finish)
@@ -1062,7 +1064,7 @@ private final class Session {
 
         // ---- assignments ----------------------------------------------------------
         try writeAssignments(project, eff: eff, pct: pct, children: children, byUID: byUID,
-                             time: time, now: now, keptWork: keptWork, assignmentWork: assignmentWork)
+                             time: timeOfTask, now: now, keptWork: keptWork, assignmentWork: assignmentWork)
 
         writeFieldAliases(project)
         writeEntryTable(project)
@@ -1417,7 +1419,8 @@ private final class Session {
 
     func writeAssignments(_ project: Project, eff: [Int: (start: Date, finish: Date, tenths: Int)],
                           pct: [Int: Int], children: [Int: [Int]], byUID: [Int: MPPModel.ProjectTask],
-                          time: WorkingTime, now: Date, keptWork: [Bool], assignmentWork: [Double]) throws {
+                          time taskTime: (MPPModel.ProjectTask) -> WorkingTime, now: Date, keptWork: [Bool],
+                          assignmentWork: [Double]) throws {
         let t = try assignmentTable()
         let A = MPP.AssignmentField.self
         func taskUID(_ row: Row) -> UInt32? {
@@ -1497,6 +1500,7 @@ private final class Session {
             let uid = n + 1
             let empty = spec.resource == W.nullResourceUID
             let task = byUID[spec.task]!
+            let time = taskTime(task)
             let (start, finish, tenths) = eff[spec.task]!
             let ownRow = own["\(spec.task)/\(spec.resource)"]
             // The work the file holds, kept with the fields that follow from
