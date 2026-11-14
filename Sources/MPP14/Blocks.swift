@@ -249,6 +249,8 @@ public enum MPP {
         public static let resourceUniqueID: UInt32 = 2
         /// Timephased remaining work: where a split task's gaps fall.
         public static let plannedWork: UInt32 = 49
+        /// Timephased actual work: the done part of a task under way.
+        public static let actualWorkData: UInt32 = 50
         public static let start: UInt32 = 20
         public static let finish: UInt32 = 21
         public static let resume: UInt32 = 24
