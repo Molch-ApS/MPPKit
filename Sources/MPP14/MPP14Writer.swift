@@ -953,6 +953,7 @@ private final class Session {
         rscOwned.formUnion(W.Rsc.baselineBudget.flatMap { [$0.work, $0.cost] })
         rscOwned.formUnion(W.Rsc.baselineTimephased)
         rscOwned.formUnion([RF.name, RF.initials, RF.emailAddress])
+        rscOwned.formUnion(RF.costRateTables)
         rscOwned.formUnion(MPP.ResourceCustomField.text + MPP.ResourceCustomField.number
                            + MPP.ResourceCustomField.date + MPP.ResourceCustomField.flag)
         var ownRsc: [Int: Row] = [:]
@@ -991,6 +992,13 @@ private final class Session {
                     extra.append((W.Rsc.baselineBudget[slot].cost, W.unsetDouble))
                 }
             }
+            // Cost rate tables: A whenever the resource is paid, B to E when
+            // they hold more than Project's default (one rate of nothing).
+            for (n, rates) in res.costRateTables.prefix(RF.costRateTables.count).enumerated() where !rates.isEmpty {
+                let isDefault = rates.count == 1 && rates[0].standardPerHour == 0 && rates[0].overtimePerHour == 0
+                    && rates[0].costPerUse == 0
+                if n == 0 || !isDefault { extra.append((RF.costRateTables[n], MPP.encodePayRates(rates))) }
+            }
             let own = project.resourceCalendars.first { $0.resourceUID == res.uid && $0.uid == res.calendarUID }
             let calUID = calendars.addResourceCalendar(resourceUID: res.uid, guid: res.guid, base: own?.baseCalendarUID,
                                                        calendar: own)
@@ -1022,6 +1030,11 @@ private final class Session {
                 // A value-list entry keeps its link to the list, as on tasks.
                 for (n, v) in res.text where was.text[n] == v {
                     Self.keepUnchanged(&extra, [MPP.ResourceCustomField.text[n - 1]], from: mine)
+                }
+                // Unchanged rate tables keep Project's bytes (and the units they
+                // are shown in).
+                if res.costRateTables == was.costRateTables {
+                    Self.keepUnchanged(&extra, RF.costRateTables, from: mine)
                 }
                 for slot in res.baselines.projectSlots.keys where res.baselines[slot] == was.baselines[slot] {
                     var fields = [MPP14File.resourceBaselineWork[slot], MPP14File.resourceBaselineCost[slot]]
