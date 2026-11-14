@@ -35,7 +35,8 @@ import Foundation
 /// A backward pass then gives every task its late start and finish (and so
 /// slack and the critical path), and as-late-as-possible tasks are moved to
 /// their late dates. The "no later than" constraints (`SNLT`, `FNLT`) cap the
-/// late dates; a schedule that breaks them is left to Project to report.
+/// late dates and, while the project honours constraint dates, hold the task
+/// at the date against its links (the late links then show negative slack).
 /// Resource levelling is not done.
 public enum Scheduler {
     public enum Failure: Error, CustomStringConvertible, Equatable {
@@ -244,6 +245,18 @@ public enum Scheduler {
                 if task.constraint == "MFO", let d = task.constraintDate {
                     finish = d
                     start = isMilestone ? d : before(d, span, task, wt)
+                }
+                // "No later than" wins over links when the project honours
+                // constraint dates (Project's default): the task is held at
+                // the date, and the late links show as negative slack.
+                if project.honorsConstraintDates, started == nil, let d = task.constraintDate {
+                    if task.constraint == "SNLT", start > d {
+                        start = d
+                        finish = isMilestone ? d : after(d, span, task, wt)
+                    } else if task.constraint == "FNLT", finish > d {
+                        finish = d
+                        start = isMilestone ? d : before(d, span, task, wt)
+                    }
                 }
                 task.start = start
                 task.finish = finish

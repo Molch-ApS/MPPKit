@@ -571,6 +571,11 @@ public struct Project: Sendable, Equatable {
     /// task's predecessor moves later, the part still to do moves after it
     /// and the done part stays. Off, a started task stays where it is.
     public var splitsInProgressTasks: Bool = true
+    /// Project's "Tasks will always honor their constraint dates" (on by
+    /// default): a Start or Finish No Later Than holds the task at its date
+    /// even when a link would push it later, and the link shows negative
+    /// slack. Off, the links win.
+    public var honorsConstraintDates: Bool = true
     /// Project's "Tasks are critical if slack is less than or equal to", in
     /// days. 0 is Project's default.
     public var criticalSlackDays: Double = 0
