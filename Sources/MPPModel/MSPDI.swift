@@ -8,16 +8,13 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Microsoft Project XML needs full Foundation (DateFormatter, XMLParser):
-// not in the WebAssembly build.
-#if !os(WASI)
+// Plain Swift and FoundationEssentials only (dates, numbers and the XML
+// reader are written here), so Microsoft Project XML is read and written the
+// same on Apple platforms, Linux and in the WebAssembly build.
 #if os(WASI)
 import FoundationEssentials
 #else
 import Foundation
-#endif
-#if canImport(FoundationXML)
-import FoundationXML
 #endif
 
 /// Microsoft Project's XML format (MSPDI, the schema Project writes as
@@ -148,7 +145,7 @@ public enum MSPDI {
             if !r.initials.isEmpty { x.leaf("Initials", r.initials) }
             if !r.email.isEmpty { x.leaf("EmailAddress", r.email) }
             if !r.group.isEmpty { x.leaf("Group", r.group) }
-            x.leaf("MaxUnits", String(format: "%.2f", r.maxUnits))
+            x.leaf("MaxUnits", fixed2(r.maxUnits))
             x.close("Resource")
         }
         x.close("Resources")
@@ -159,7 +156,7 @@ public enum MSPDI {
             x.leaf("UID", "\(a.uid == 0 ? i + 1 : a.uid)")
             x.leaf("TaskUID", "\(a.taskUID)")
             x.leaf("ResourceUID", "\(a.resourceUID)")
-            x.leaf("Units", String(format: "%.2f", a.units))
+            x.leaf("Units", fixed2(a.units))
             let hours = a.workHours > 0 ? a.workHours
                 : (p.task(uid: a.taskUID).map { $0.durationDays * Double(p.minutesPerDay) / 60 * a.units } ?? 0)
             x.leaf("Work", duration(minutes: Int.clamped(hours * 60)))
@@ -359,17 +356,78 @@ public enum MSPDI {
 
     // MARK: Values
 
-    private static let iso: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(secondsFromGMT: 0)
-        f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
-        return f
-    }()
+    /// `2026-11-19T08:00:00`: the date's wall clock (dates here are UTC-based
+    /// wall times), whole seconds, as DateFormatter's `yyyy-MM-dd'T'HH:mm:ss`
+    /// in en_US_POSIX and GMT wrote it.
+    static func date(_ d: Date) -> String {
+        let t = Int(d.timeIntervalSince1970.rounded(.down))
+        let days = t >= 0 ? t / 86_400 : -((-t + 86_399) / 86_400)
+        let s = t - days * 86_400
+        let (y, m, day) = civil(days)
+        return "\(pad(y, 4))-\(pad(m, 2))-\(pad(day, 2))T\(pad(s / 3600, 2)):\(pad(s % 3600 / 60, 2)):\(pad(s % 60, 2))"
+    }
 
-    static func date(_ d: Date) -> String { iso.string(from: d) }
-    static func parseDate(_ s: String) -> Date? { iso.date(from: String(s.prefix(19))) }
-    static func clock(_ minutes: Int) -> String { String(format: "%02d:%02d", minutes / 60, minutes % 60) }
+    /// The first 19 characters as `yyyy-MM-ddTHH:mm:ss` (a time zone or
+    /// fraction after them is ignored, as before); nil when they aren't a date.
+    static func parseDate(_ s: String) -> Date? {
+        let c = Array(s.utf8.prefix(19))
+        guard c.count == 19, c[4] == 0x2D, c[7] == 0x2D, c[10] == 0x54, c[13] == 0x3A, c[16] == 0x3A else { return nil }
+        func num(_ r: Range<Int>) -> Int? {
+            var v = 0
+            for i in r { guard (0x30...0x39).contains(c[i]) else { return nil }; v = v * 10 + Int(c[i] - 0x30) }
+            return v
+        }
+        guard let y = num(0..<4), let m = num(5..<7), let d = num(8..<10),
+              let h = num(11..<13), let mi = num(14..<16), let se = num(17..<19),
+              (1...12).contains(m), d >= 1, d <= daysIn(m, y), h < 24, mi < 60, se < 60 else { return nil }
+        let seconds = days(y, m, d) * 86_400 + h * 3600 + mi * 60 + se
+        return Date(timeIntervalSince1970: TimeInterval(seconds))
+    }
+
+    static func clock(_ minutes: Int) -> String { "\(pad(minutes / 60, 2)):\(pad(minutes % 60, 2))" }
+
+    /// Two decimals, exactly as `%.2f`: `1.00`, `0.50`, `0.12` for 0.125 (a tie
+    /// goes to even), `2.67` for 2.675 (just under it in binary), `-0.00`.
+    static func fixed2(_ v: Double) -> String {
+        guard v.isFinite else { return "0.00" }
+        let a = abs(v)
+        var cents = (a * 100).rounded(.down)
+        // Which side of the half-way point the exact a × 100 is: one rounding (fma), so its sign is exact.
+        let past = (-(cents + 0.5)).addingProduct(a, 100)
+        if past > 0 || (past == 0 && cents.truncatingRemainder(dividingBy: 2) == 1) { cents += 1 }
+        let c = Int(cents)
+        return "\(v.sign == .minus ? "-" : "")\(c / 100).\(pad(c % 100, 2))"
+    }
+
+    private static func pad(_ n: Int, _ width: Int) -> String {
+        let s = String(abs(n))
+        return (n < 0 ? "-" : "") + String(repeating: "0", count: max(0, width - s.count)) + s
+    }
+
+    // Days from 1970-01-01 and back, proleptic Gregorian (H. Hinnant's algorithms).
+    static func days(_ y0: Int, _ m: Int, _ d: Int) -> Int {
+        let y = m <= 2 ? y0 - 1 : y0
+        let era = (y >= 0 ? y : y - 399) / 400
+        let yoe = y - era * 400
+        let doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+        return era * 146_097 + doe - 719_468
+    }
+    static func civil(_ z0: Int) -> (Int, Int, Int) {
+        let z = z0 + 719_468
+        let era = (z >= 0 ? z : z - 146_096) / 146_097
+        let doe = z - era * 146_097
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+        let mp = (5 * doy + 2) / 153
+        let d = doy - (153 * mp + 2) / 5 + 1
+        let m = mp < 10 ? mp + 3 : mp - 9
+        return (yoe + era * 400 + (m <= 2 ? 1 : 0), m, d)
+    }
+    private static func daysIn(_ m: Int, _ y: Int) -> Int {
+        if m == 2 { return (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 ? 29 : 28 }
+        return [4, 6, 9, 11].contains(m) ? 30 : 31
+    }
     static func parseClock(_ s: String) -> Int? {
         let parts = s.split(separator: ":").compactMap { Int($0) }
         return parts.count >= 2 ? parts[0] * 60 + parts[1] : nil
@@ -441,51 +499,225 @@ private struct XMLOut {
         text += String(repeating: "  ", count: depth) + "<\(tag)>\(Self.escape(value))</\(tag)>\n"
     }
     static func escape(_ s: String) -> String {
-        s.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\"", with: "&quot;")
+        var out = ""
+        out.reserveCapacity(s.utf8.count)
+        for ch in s.unicodeScalars {
+            switch ch {
+            case "&": out += "&amp;"
+            case "<": out += "&lt;"
+            case ">": out += "&gt;"
+            case "\"": out += "&quot;"
+            default: out.unicodeScalars.append(ch)
+            }
+        }
+        return out
     }
 }
 
-/// A small DOM over Foundation's streaming parser: enough for MSPDI.
+/// A small DOM, enough for MSPDI, from a reader of our own (no XMLParser, which
+/// the WebAssembly build doesn't have). Well-formed XML only: elements, text,
+/// the five named entities and character references, CDATA, comments,
+/// processing instructions and a DOCTYPE (skipped, never resolved). Attributes
+/// are read past and kept out of the tree, as before. Names keep any prefix.
 final class XMLTree {
     let name: String
     var text = ""
     private(set) var kids: [XMLTree] = []
     init(name: String) { self.name = name }
+    /// Freed without recursion, as it was read: a very deep file can't exhaust the stack.
+    deinit {
+        var rest = kids
+        kids = []
+        while let n = rest.popLast() { rest += n.kids; n.kids = [] }
+    }
 
     func child(_ name: String) -> XMLTree? { kids.first { $0.name == name } }
     func children(_ name: String) -> [XMLTree] { kids.filter { $0.name == name } }
     /// The text of a direct child element: a leaf's exactly (a task name may
     /// end in a space), an element with children's trimmed of the layout.
     subscript(_ name: String) -> String? {
-        child(name).map { $0.kids.isEmpty ? $0.text : $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+        child(name).map { $0.kids.isEmpty ? $0.text : Self.trimmed($0.text) }
+    }
+    static func trimmed(_ s: String) -> String {
+        let blank: (Character) -> Bool = { $0.isWhitespace || $0.isNewline }
+        guard let a = s.firstIndex(where: { !blank($0) }), let b = s.lastIndex(where: { !blank($0) }) else { return "" }
+        return String(s[a...b])
+    }
+
+    struct Malformed: Error, CustomStringConvertible {
+        let offset: Int, reason: String
+        var description: String { "Not well-formed XML at byte \(offset): \(reason)" }
     }
 
     static func parse(_ data: Data) throws -> XMLTree {
-        let delegate = Builder()
-        let parser = XMLParser(data: data)
-        parser.delegate = delegate
-        guard parser.parse(), let root = delegate.root else {
-            throw parser.parserError ?? MSPDI.Failure.notMSPDI
-        }
-        return root
+        var reader = Reader(bytes: decode(data))
+        return try reader.document()
     }
 
-    private final class Builder: NSObject, XMLParserDelegate {
-        var root: XMLTree?
-        var stack: [XMLTree] = []
-        func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?,
-                    qualifiedName: String?, attributes: [String: String] = [:]) {
-            let node = XMLTree(name: name)
-            stack.last?.kids.append(node)
-            if root == nil { root = node }
-            stack.append(node)
+    /// UTF-8 bytes: UTF-16 (with its byte order mark) is converted, a UTF-8 BOM dropped.
+    private static func decode(_ data: Data) -> [UInt8] {
+        let b = [UInt8](data)
+        if b.count >= 2, (b[0] == 0xFF && b[1] == 0xFE) || (b[0] == 0xFE && b[1] == 0xFF) {
+            let little = b[0] == 0xFF
+            var units: [UInt16] = []
+            units.reserveCapacity(b.count / 2)
+            var i = 2
+            while i + 1 < b.count { units.append(little ? UInt16(b[i]) | UInt16(b[i + 1]) << 8 : UInt16(b[i]) << 8 | UInt16(b[i + 1])); i += 2 }
+            return Array(String(decoding: units, as: UTF16.self).utf8)
         }
-        func parser(_ parser: XMLParser, foundCharacters string: String) { stack.last?.text += string }
-        func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
-            stack.removeLast()
+        if b.count >= 3, b[0] == 0xEF, b[1] == 0xBB, b[2] == 0xBF { return Array(b[3...]) }
+        return b
+    }
+
+    private struct Reader {
+        let bytes: [UInt8]
+        var i = 0
+
+        func fail(_ reason: String) -> Malformed { Malformed(offset: i, reason: reason) }
+        func at(_ s: String) -> Bool {
+            let u = Array(s.utf8)
+            guard i + u.count <= bytes.count else { return false }
+            for k in 0..<u.count where bytes[i + k] != u[k] { return false }
+            return true
+        }
+        mutating func skip(past s: String) throws {
+            while i < bytes.count { if at(s) { i += s.utf8.count; return }; i += 1 }
+            throw fail("\(s) expected")
+        }
+        mutating func spaces() { while i < bytes.count, [0x20, 0x09, 0x0A, 0x0D].contains(bytes[i]) { i += 1 } }
+        static func isNameByte(_ c: UInt8) -> Bool {
+            c >= 0x80 || (c >= 0x61 && c <= 0x7A) || (c >= 0x41 && c <= 0x5A) || (c >= 0x30 && c <= 0x39)
+                || c == 0x5F || c == 0x3A || c == 0x2D || c == 0x2E
+        }
+        mutating func name() throws -> String {
+            let start = i
+            while i < bytes.count, Self.isNameByte(bytes[i]) { i += 1 }
+            guard i > start, !(0x30...0x39).contains(bytes[start]), bytes[start] != 0x2D, bytes[start] != 0x2E else { throw fail("a name expected") }
+            return String(decoding: bytes[start..<i], as: UTF8.self)
+        }
+
+        /// Comments, processing instructions and a DOCTYPE, where markup may stand outside elements.
+        mutating func misc() throws {
+            while true {
+                spaces()
+                if at("<!--") { try skip(past: "-->") }
+                else if at("<?") { try skip(past: "?>") }
+                else if at("<!DOCTYPE") { try doctype() }
+                else { return }
+            }
+        }
+        mutating func doctype() throws {
+            var depth = 0
+            while i < bytes.count {
+                let c = bytes[i]; i += 1
+                if c == 0x5B { depth += 1 } else if c == 0x5D { depth -= 1 } else if c == 0x3E, depth <= 0 { return }
+            }
+            throw fail("the DOCTYPE isn't closed")
+        }
+
+        mutating func document() throws -> XMLTree {
+            try misc()
+            guard at("<") else { throw fail("no root element") }
+            let root = try element()
+            try misc()
+            guard i == bytes.count else { throw fail("content after the root element") }
+            return root
+        }
+
+        /// One element and everything in it, with an explicit stack (no recursion, any depth).
+        mutating func element() throws -> XMLTree {
+            var stack: [XMLTree] = []
+            var root: XMLTree?
+            var text: [UInt8] = []
+            func flush() { if let top = stack.last, !text.isEmpty { top.text += String(decoding: text, as: UTF8.self); text.removeAll(keepingCapacity: true) } }
+            repeat {
+                guard i < bytes.count else { throw fail("<\(stack.last?.name ?? "?")> isn't closed") }
+                if bytes[i] != 0x3C {
+                    if bytes[i] == 0x26 { try reference(into: &text) } else { newline(into: &text) }
+                    continue
+                }
+                if at("<!--") { try skip(past: "-->"); continue }
+                if at("<![CDATA[") {
+                    i += 9
+                    while !at("]]>") {
+                        guard i < bytes.count else { throw fail("the CDATA section isn't closed") }
+                        newline(into: &text)
+                    }
+                    i += 3
+                    continue
+                }
+                if at("<?") { try skip(past: "?>"); continue }
+                if at("</") {
+                    i += 2
+                    let n = try name()
+                    spaces()
+                    guard i < bytes.count, bytes[i] == 0x3E else { throw fail("> expected after </\(n)") }
+                    i += 1
+                    guard let open = stack.last, open.name == n else { throw fail("</\(n)> doesn't close <\(stack.last?.name ?? "")>") }
+                    flush()
+                    stack.removeLast()
+                    continue
+                }
+                guard !at("<!") else { throw fail("unexpected markup") }
+                i += 1
+                let node = XMLTree(name: try name())
+                try attributes()
+                flush()
+                if let parent = stack.last { parent.kids.append(node) } else if root == nil { root = node }
+                if at("/>") { i += 2 } else { i += 1; stack.append(node) }
+            } while !stack.isEmpty
+            return root!
+        }
+
+        /// One byte of text, with line ends read as XML says: CR LF and a lone CR are LF.
+        mutating func newline(into out: inout [UInt8]) {
+            if bytes[i] == 0x0D {
+                out.append(0x0A); i += 1
+                if i < bytes.count, bytes[i] == 0x0A { i += 1 }
+            } else { out.append(bytes[i]); i += 1 }
+        }
+
+        /// Attributes, checked and skipped; the tag's end left at `>` or `/>`.
+        mutating func attributes() throws {
+            while true {
+                let before = i
+                spaces()
+                guard i < bytes.count else { throw fail("the tag isn't closed") }
+                if bytes[i] == 0x3E || at("/>") { return }
+                guard i > before else { throw fail("space expected between attributes") }
+                _ = try name()
+                spaces()
+                guard i < bytes.count, bytes[i] == 0x3D else { throw fail("= expected") }
+                i += 1
+                spaces()
+                guard i < bytes.count, bytes[i] == 0x22 || bytes[i] == 0x27 else { throw fail("a quoted value expected") }
+                let quote = bytes[i]
+                i += 1
+                while i < bytes.count, bytes[i] != quote { guard bytes[i] != 0x3C else { throw fail("< in an attribute") }; i += 1 }
+                guard i < bytes.count else { throw fail("the attribute isn't closed") }
+                i += 1
+            }
+        }
+
+        /// `&amp;` and friends, `&#38;`, `&#x26;`. Any other entity is refused: none is ever resolved.
+        mutating func reference(into out: inout [UInt8]) throws {
+            let start = i
+            i += 1
+            while i < bytes.count, bytes[i] != 0x3B, i - start < 12 { i += 1 }
+            guard i < bytes.count, bytes[i] == 0x3B else { i = start; throw fail("an & that isn't a reference") }
+            let body = String(decoding: bytes[(start + 1)..<i], as: UTF8.self)
+            i += 1
+            let named: [String: UInt8] = ["amp": 0x26, "lt": 0x3C, "gt": 0x3E, "quot": 0x22, "apos": 0x27]
+            if let c = named[body] { out.append(c); return }
+            if body.hasPrefix("#") {
+                let hex = body.hasPrefix("#x")
+                if let v = UInt32(body.dropFirst(hex ? 2 : 1), radix: hex ? 16 : 10), v != 0, let u = Unicode.Scalar(v) {
+                    out.append(contentsOf: Array(String(Character(u)).utf8)); return
+                }
+            }
+            i = start
+            throw fail("unknown entity &\(body);")
         }
     }
 }
 
-#endif

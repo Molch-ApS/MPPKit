@@ -3,6 +3,25 @@
 Each release is also on [GitHub](https://github.com/Molch-ApS/MPPKit/releases),
 with every pull request in it. Releases before 0.6.0 are described only there.
 
+## Unreleased
+
+### Changed
+
+- Microsoft Project XML (`MSPDI`) is read and written with plain Swift and
+  FoundationEssentials only: its own XML reader instead of `XMLParser`, and
+  its own date and number text instead of `DateFormatter` and
+  `String(format:)`. It now builds for WebAssembly (WASI), so MPP Studio on
+  the web exports and imports XML too. The text is the same as before
+  (tests hold the dates to DateFormatter's from 1601 to 2400, the numbers to
+  `%.2f`, and the tree to XMLParser's for 148 files Project 2002–2019 saved).
+  The reader refuses what isn't well-formed XML and never resolves an entity
+  or a DTD; a very deep file can't exhaust the stack.
+
+### Fixed
+
+- Notes Project writes as CDATA are read. `XMLParser`'s CDATA was dropped,
+  so a task's notes from Project's XML came in empty.
+
 ## 0.6.2
 
 ### Changed
