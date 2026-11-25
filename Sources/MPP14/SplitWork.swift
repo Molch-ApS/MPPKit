@@ -31,9 +31,10 @@ extension MPP {
     /// planned work starts there.
     public static func splitGaps(_ planned: [UInt8], done: Int = 0) -> [TaskSplit] {
         let r = BinaryReader(planned)
-        // Int(exactly:): a u32 past 2³¹ doesn't fit where Int is 32 bits (the web core).
+        // A u32 past 2³¹ doesn't fit where Int is 32 bits (the web core): Int(_:)
+        // reads it as .tooLarge there (FileIntegers.swift).
         guard let count = r.u16(at: 0), count >= (done > 0 ? 2 : 3),
-              let first = r.u32(at: 4).flatMap({ Int(exactly: $0) }) else { return [] }
+              let first = r.u32(at: 4).map(Int.init) else { return [] }
         var gaps: [TaskSplit] = []
         var work = done, previous = 0
         for i in 0..<Int(count) {
@@ -44,7 +45,8 @@ extension MPP {
             if units == 0 {
                 if work > 0, minutes > 0 { gaps.append(TaskSplit(workMinutes: work, idleMinutes: minutes)) }
             } else {
-                work += minutes
+                // Capped: damaged ends summed past a 32-bit Int (#978).
+                work = Swift.min(work + minutes, .tooLarge)
             }
         }
         return gaps
@@ -56,14 +58,14 @@ extension MPP {
     public static func actualWorkMinutes(_ actual: [UInt8]) -> Int {
         let r = BinaryReader(actual)
         guard let count = r.u16(at: 0), let size = r.u16(at: 2), size >= 24,
-              let first = r.u32(at: 4).flatMap({ Int(exactly: $0) }) else { return 0 }
+              let first = r.u32(at: 4).map(Int.init) else { return 0 }
         var minutes = 0, previous = 0
         for i in 0..<Int(min(count, 1_000)) {
             let at = first + i * Int(size)
             guard let units = r.f64(at: at + 8)?.fromFile, let end = r.u32(at: at + 16) else { break }
             let span = Int((Double(end) / 80).rounded()) - previous
             previous += span
-            if units != 0 { minutes += span }
+            if units != 0 { minutes = Swift.min(minutes + span, .tooLarge) }
         }
         return minutes
     }
