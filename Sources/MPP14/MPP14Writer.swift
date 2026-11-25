@@ -1799,7 +1799,8 @@ private final class Session {
                     changed = true
                 }
                 if let oldRows = p.values[W.View.edlRows], let layout = p.values[W.View.edlLayout],
-                   let oldN = BinaryReader(layout).u32(at: 0).map(Int.init) {
+                   let oldN = BinaryReader(layout).u32(at: 0).map(Int.init), oldN < layout.count {
+                    // oldN past the layout is damage: `(oldN + 1) * 4` overflowed a 32-bit Int (#978).
                     let rowHeight = BinaryReader(layout).u16(at: 4 + (oldN + 1) * 4).map(Int.init).flatMap { $0 == 0 ? nil : $0 } ?? 42
                     p.values[W.View.edlRows] = rows + Array(oldRows.dropFirst(min(oldN * 4, oldRows.count)))
                     var newLayout = le(UInt32(uids.count))

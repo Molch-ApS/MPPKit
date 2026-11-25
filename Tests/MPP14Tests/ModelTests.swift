@@ -145,6 +145,18 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(CalendarData.parse(CalendarData.build(week: [:], exceptions: [])).week, [:])
     }
 
+    /// A damaged shift length (0xFFFFFFFF) ends at midnight: summed over the days,
+    /// a 7,000-hour shift overflowed Int where it's 32 bits (MPP Studio #978).
+    func testCalendarDataDamagedShiftEndsAtMidnight() {
+        var blob = CalendarData.build(week: [2: [480...1_020]], exceptions: [])
+        // Monday's day block (weekday 2), its first shift's length (tenths of a minute).
+        let at = (2 - 1) * 60 + 20 // 60-byte day blocks
+        XCTAssertEqual(BinaryReader(blob).u32(at: at), UInt32((1_020 - 480) * 10))
+        blob.replaceSubrange(at..<at + 4, with: [0xFF, 0xFF, 0xFF, 0xFF])
+        let ranges = CalendarData.parse(blob).week[2].flatMap { $0 } ?? []
+        XCTAssertEqual(ranges, [480...1_440])
+    }
+
     // MARK: - Notes
 
     func testNotesRoundTripThroughRTF() {

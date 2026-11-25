@@ -57,8 +57,11 @@ public enum CalendarData {
             for i in 0..<count {
                 guard let start = r.u16(at: base + 8 + 2 * i),
                       let length = r.u32(at: base + 20 + 4 * i) else { break }
+                // A day's shift ends by midnight (24:00 = 1440): a longer one is
+                // damage, and summed over the days it overflowed Int where it's
+                // 32 bits (MPP Studio #978).
                 let lo = Int(start) / 10
-                out.append(lo...(lo + Int(length) / 10))
+                out.append(lo...max(lo, min(lo + Int(length) / 10, 24 * 60)))
             }
             return out
         }
