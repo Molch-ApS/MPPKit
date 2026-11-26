@@ -75,7 +75,7 @@ Swift Package Manager:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Molch-ApS/MPPKit.git", from: "0.6.0"),
+    .package(url: "https://github.com/Molch-ApS/MPPKit.git", from: "0.7.0"),
 ],
 targets: [
     .target(name: "MyApp", dependencies: ["MPPKit"]),
