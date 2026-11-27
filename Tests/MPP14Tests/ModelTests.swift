@@ -192,6 +192,25 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(a, b)
     }
 
+    func testContainerWithAnyByteOrderMarkIsRead() throws {
+        // A .mpp whose header says 0x0000 where [MS-CFB] puts 0xFFFE was refused
+        // ("unsupported byte-order mark 0x0000", 26 Nov 2026); the file is little-endian all the same.
+        let root = CFBStorage()
+        root.setStream(path: "   114/Props", [1, 2, 3])
+        root.addStream("big", (0..<9_000).map { UInt8($0 % 251) })
+        let good = try CFBWriter.write(root: root, rootCLSID: CFBFile.projectRootCLSID)
+        for mark: [UInt8] in [[0x00, 0x00], [0xFF, 0xFF], [0xFF, 0xFE]] {
+            var bytes = good
+            bytes[28] = mark[0]; bytes[29] = mark[1]
+            let back = try CFBFile(bytes: bytes)
+            XCTAssertEqual(try back.root.stream(path: "   114/Props"), [1, 2, 3])
+            XCTAssertEqual(try back.root.stream(path: "big").count, 9_000)
+        }
+        var garbage = good
+        garbage[28] = 0; garbage[29] = 0; garbage[30] = 0; garbage[31] = 0
+        XCTAssertThrowsError(try CFBFile(bytes: garbage))
+    }
+
     func testPropertySetStringUpdateKeepsOtherProperties() {
         // One section, code page 1252, an int and a string.
         var w = BinaryWriter()
