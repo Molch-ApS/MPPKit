@@ -78,8 +78,11 @@ public final class CFBFile {
         let signature: [UInt8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]
         guard Array(bytes[0..<8]) == signature else { throw CFBError.notCompoundFile }
 
-        guard let byteOrder = r.u16(at: 28) else { throw CFBError.truncated("header") }
-        guard byteOrder == 0xFFFE else { throw CFBError.unsupportedByteOrder(byteOrder) }
+        // The byte order is always little-endian; [MS-CFB] fixes the mark at 0xFFFE. Some
+        // writers leave it 0x0000 (a .mpp refused that way on 26 Nov 2026), and readers
+        // such as olefile read those files all the same, so the mark isn't checked: the
+        // sector size and the tables below still have to make sense.
+        guard r.u16(at: 28) != nil else { throw CFBError.truncated("header") }
 
         guard let sectorShift = r.u16(at: 30) else { throw CFBError.truncated("header") }
         guard sectorShift == 9 || sectorShift == 12 else {
